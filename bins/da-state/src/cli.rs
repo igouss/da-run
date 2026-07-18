@@ -30,6 +30,11 @@ pub enum Command {
         run_dir: PathBuf,
         dispatch: DispatchArg,
     },
+    /// Publish the derived state to the DaRun mirror (needs DA_STEER_INGRESS).
+    Notify {
+        #[arg(long = "run")]
+        run_dir: PathBuf,
+    },
     /// Embedded smoke test over a scratch run dir.
     Selftest,
 }
@@ -52,11 +57,9 @@ impl DispatchArg {
             DispatchArg::Design => Dispatch::Design,
             DispatchArg::DesignReview => Dispatch::DesignReview,
             DispatchArg::Tests => Dispatch::Tests,
-            DispatchArg::Implement | DispatchArg::ImplementParallelAttempt => {
-                Dispatch::Implement {
-                    parallel_attempts: None,
-                }
-            }
+            DispatchArg::Implement | DispatchArg::ImplementParallelAttempt => Dispatch::Implement {
+                parallel_attempts: None,
+            },
             DispatchArg::Verify => Dispatch::Verify,
             DispatchArg::Commit => Dispatch::Commit,
         }

@@ -5,6 +5,7 @@ members = [
     "crates/ports",
     "crates/app",
     "crates/adapter-fs",
+    "crates/adapter-restate",
     "crates/wire",
     "bins/da-state",
 ]
@@ -25,7 +26,6 @@ thiserror = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
-ureq = "2"
 proptest = "1"
 tempfile = "3"
 insta = { version = "1", features = ["json"] }

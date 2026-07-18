@@ -3,7 +3,7 @@
 #![allow(clippy::unwrap_used)]
 
 use da_app::check_dispatch;
-use da_app::{Decision, StatusReport, publish_mirror, status};
+use da_app::{Decision, Published, StatusReport, publish_mirror, status};
 use da_domain::{
     Derived, Dispatch, FsFacts, Phase, Refusal, RunId, RunState, StageFacts, StageFactsMap,
     StageId, Verdict,
@@ -120,12 +120,9 @@ fn publish_mirror_sends_run_id_and_derived_state() {
     let mirror: RecordingMirror = RecordingMirror {
         published: RefCell::new(Vec::new()),
     };
-    let derived: Derived = publish_mirror(&source, &mirror, Path::new("unused")).unwrap();
+    let sent: Published = publish_mirror(&source, &mirror, Path::new("unused")).unwrap();
     let published: Vec<(RunId, Derived)> = mirror.published.into_inner();
-    assert_eq!(
-        published,
-        vec![(RunId::new("use-case-run").unwrap(), derived)]
-    );
+    assert_eq!(published, vec![(sent.run_id, sent.derived)]);
 }
 
 // Scenario: a gated run reports its verdict through status

@@ -1,4 +1,4 @@
-use da_domain::{Derived, FsFacts, derive};
+use da_domain::{Derived, FsFacts, RunId, derive};
 use da_ports::{MirrorError, RunMirror, SnapshotError, SnapshotSource};
 use std::path::Path;
 
@@ -11,15 +11,25 @@ pub enum PublishError {
     Mirror(#[from] MirrorError),
 }
 
+/// What a successful publish sent.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Published {
+    pub run_id: RunId,
+    pub derived: Derived,
+}
+
 /// Snapshot a run dir and publish its derived state to the mirror.
 /// Best-effort policy (ignore an unreachable mirror) is the caller's call.
 pub fn publish_mirror<S: SnapshotSource, M: RunMirror>(
     source: &S,
     mirror: &M,
     run_dir: &Path,
-) -> Result<Derived, PublishError> {
+) -> Result<Published, PublishError> {
     let facts: FsFacts = source.snapshot(run_dir)?;
     let derived: Derived = derive(&facts);
     mirror.publish(&facts.run_id, &derived)?;
-    Ok(derived)
+    Ok(Published {
+        run_id: facts.run_id,
+        derived,
+    })
 }

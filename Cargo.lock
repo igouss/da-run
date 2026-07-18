@@ -158,6 +158,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "da-adapter-restate"
+version = "0.1.0"
+dependencies = [
+ "da-domain",
+ "da-ports",
+ "da-wire",
+ "serde_json",
+]
+
+[[package]]
 name = "da-app"
 version = "0.1.0"
 dependencies = [
@@ -189,6 +199,7 @@ dependencies = [
  "anyhow",
  "clap",
  "da-adapter-fs",
+ "da-adapter-restate",
  "da-app",
  "da-domain",
  "da-ports",

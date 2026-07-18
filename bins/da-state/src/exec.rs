@@ -2,11 +2,12 @@ use crate::cli::{Cli, Command};
 use crate::pretty;
 use crate::selftest;
 use da_adapter_fs::FsSnapshotSource;
-use da_app::{Decision, check_dispatch, status};
+use da_adapter_restate::RestateIngressMirror;
+use da_app::{Decision, PublishError, check_dispatch, publish_mirror, status};
 use da_domain::{Derived, Dispatch, Refusal, derive};
 use da_ports::{SnapshotError, SnapshotSource};
 use da_wire::{CheckWire, DerivedWire, StatusWire};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Exit codes — bin/steer's convention, extended.
 pub const EXIT_OK: u8 = 0;
@@ -25,6 +26,7 @@ pub fn execute(args: &Cli) -> Outcome {
         Command::Derive { run_dir } => run_derive(run_dir),
         Command::Status { run_dir } => run_status(run_dir),
         Command::Check { run_dir, dispatch } => run_check(run_dir, &dispatch.to_dispatch()),
+        Command::Notify { run_dir } => run_notify(run_dir),
         Command::Selftest => selftest::run(),
     }
 }
@@ -72,6 +74,54 @@ fn run_check(run_dir: &Path, dispatch: &Dispatch) -> Outcome {
         },
         Err(error) => snapshot_failure(&error),
     }
+}
+
+/// Best-effort by configuration: no `DA_STEER_INGRESS` means the mirror is
+/// off — a clean no-op, exit 0. A configured-but-failing publish is exit 1.
+fn run_notify(run_dir: &Path) -> Outcome {
+    let ingress: Option<String> = std::env::var("DA_STEER_INGRESS").ok();
+    let Some(ingress) = ingress else {
+        return Outcome {
+            json: serde_json::json!({
+                "published": false,
+                "note": "DA_STEER_INGRESS unset — mirror disabled",
+            })
+            .to_string(),
+            pretty: None,
+            exit_code: EXIT_OK,
+        };
+    };
+    let mirror: RestateIngressMirror = RestateIngressMirror {
+        ingress,
+        ca_path: restate_ca(),
+    };
+    match publish_mirror(&FsSnapshotSource, &mirror, run_dir) {
+        Ok(published) => Outcome {
+            json: serde_json::json!({
+                "published": true,
+                "state": DerivedWire::from_domain(&published.run_id, &published.derived),
+            })
+            .to_string(),
+            pretty: None,
+            exit_code: EXIT_OK,
+        },
+        Err(PublishError::Snapshot(error)) => snapshot_failure(&error),
+        Err(PublishError::Mirror(error)) => Outcome {
+            json: serde_json::json!({ "published": false, "error": error.to_string() }).to_string(),
+            pretty: None,
+            exit_code: 1,
+        },
+    }
+}
+
+/// `RESTATE_CA`, defaulting to the homelab caddy root exactly like
+/// `bin/steer` does; only an existing file is passed to curl.
+fn restate_ca() -> Option<PathBuf> {
+    let from_env: Option<PathBuf> = std::env::var("RESTATE_CA").ok().map(PathBuf::from);
+    let default: Option<PathBuf> = std::env::var("HOME").ok().map(|home: String| {
+        PathBuf::from(home).join(".local/share/caddy/pki/authorities/local/root.crt")
+    });
+    from_env.or(default).filter(|path: &PathBuf| path.is_file())
 }
 
 fn refusal_exit(refusal: &Refusal) -> u8 {
