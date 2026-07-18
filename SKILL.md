@@ -66,8 +66,8 @@ args (absolute paths only):
   "stateCheck": <the JSON printed by the ordering-guard check below> }
 ```
 
-`workflowsDir` is required here — without it `da-stage.js` falls back to a project-local
-`.claude/workflows/` that does not exist outside the trial repo. `da-stage.js` routes to the
+`workflowsDir` is required — `da-stage.js` refuses to run without it (the engines it routes
+to live beside it in the bundle). `da-stage.js` routes to the
 right engine (per-stage models: design/implement on opus, tests/commit on sonnet; `commit` runs
 the atomized adversarial reviewer first and is blocked by any violated scenario). Relay the
 workflow's returned JSON to the user — audits passed, files written, and for `commit` whether the

@@ -14,9 +14,8 @@ export const meta = {
 //   round        optional, labeling only (commit stage)
 //   model        optional override; default is the ADR-0009 per-stage tier
 //   attempts     optional, only for implement-parallel-attempt (2-4)
-//   workflowsDir optional dir holding da-arm-pre.js / da-post-gate.js; defaults to the trial
-//                repo's project-local '.claude/workflows'. The distributable skill passes its
-//                own bundled workflows dir here so the bundle works from any install location.
+//   workflowsDir REQUIRED dir holding da-arm-pre.js / da-post-gate.js — the skill passes its
+//                own bundled workflows dir so the bundle works from any install location.
 //
 // Deliberately NOT accepted: 'verify'. gate.sh is deterministic and zero-reasoning; wrapping it
 // in an agent() call would launder the mechanical edge through an LLM. The caller runs it with
@@ -70,7 +69,13 @@ if (!model) {
   )
 }
 
-const wfDir = input.workflowsDir || '.claude/workflows'
+if (!input.workflowsDir) {
+  throw new Error(
+    'da-stage needs args.workflowsDir (the skill bundle\'s workflows/ directory — ' +
+      'the engines da-arm-pre.js and da-post-gate.js live beside this script)'
+  )
+}
+const wfDir = input.workflowsDir
 
 phase('Stage')
 

@@ -30,7 +30,7 @@ Turn the frozen change-spec and the existing codebase into an ECB design for the
 
 The ledger is the completeness backbone: stage 02 tests against it, stage 03 must fulfil
 every row, and the operator signs off against it. A dropped requirement here is invisible
-downstream — that is exactly the false green the trial guards against.
+downstream — that is exactly the false green the pipeline guards against.
 
 ## Audit
 

@@ -11,7 +11,7 @@
 ;;   bin/run capture --run RUNDIR [--round R]
 ;;       Assemble the immutable run record (manifest, result.patch, gate-report, traces)
 ;;       under <records-root>/experiments/<round>/runs/<run-id>/ (records-root =
-;;       $DA_RECORDS, else the trial repo ~/code/directory-algorithm-trial).
+;;       $DA_RECORDS, else ~/.local/share/da-run/records).
 ;;   bin/run --selftest
 ;;
 ;; Provenance model: ADR-0006. code -> the project's git; ephemera -> the run dir;
@@ -105,7 +105,7 @@
 (defn repo-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
 
 (defn records-root [] (or (System/getenv "DA_RECORDS")
-                          (str (fs/home) "/code/directory-algorithm-trial")))
+                          (str (fs/home) "/.local/share/da-run/records")))
 
 (def algorithm-files ["CLAUDE.md" "CONTEXT.md" "references" "stages"])
 

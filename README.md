@@ -209,7 +209,7 @@ Skip it for casual runs; use it when you care about provenance.
 | `tests`/`implement`/`commit` refuses with an ordering error | Run the missing prior stage — the message names which one |
 | Gate says `FAIL: .da/gate exists but is not executable` | `chmod +x .da/gate` — a present-but-broken project gate fails closed, it never silently falls back to the default |
 | `hex-lint` / `effect-audit` reported SKIP | Optional deepeners, not installed — `cargo install` from `~/code/tools/hex-lint` or `~/code/tools/effect-audit` if you want them enforced |
-| Wrong `workflowsDir` / stage can't find its workflow | Pass the skill bundle's own `workflows/` directory explicitly — a bare stage dispatch falls back to a project-local `.claude/workflows/` that won't exist outside the original trial repo |
+| Stage dispatch refuses with "needs args.workflowsDir" | Pass the skill bundle's own `workflows/` directory explicitly — the engines (`da-arm-pre.js`, `da-post-gate.js`) live beside `da-stage.js` in the bundle |
 
 ## Limitations
 
@@ -264,5 +264,6 @@ community contributions, but it's the only way I can move at this velocity and k
 
 ## Provenance
 
-Extracted from the directory-algorithm-trial (ICM-lineage folder-as-algorithm, ADRs 0001-0028).
-The trial repo remains the canonical source; this bundle is a snapshot.
+Grown out of ICM-lineage folder-as-algorithm research (ADRs 0001-0029). This repo is the
+canonical home: the skill, the workflows, the da-state authority, and the da-steer/DaRun
+Restate services all live and deploy from here.

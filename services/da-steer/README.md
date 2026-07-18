@@ -38,9 +38,9 @@ curl -sS --cacert $CA -X POST https://restate-ingress.homelab/DaRun/<run-id>/get
      -H 'content-type: application/json' -d '{}'                                   # read
 ```
 
-The payload is the versioned wire shape (`crates/wire`) — read it tolerantly. A deployment
-that adds a service (as the DaRun build did) must be re-registered before Restate routes to
-it; see `infra/systemd/README.md` for the admin-API call.
+The payload is the versioned wire shape (`crates/wire`) — read it tolerantly. A build that
+adds a service or handler must be re-registered before Restate routes to it; see
+`infra/systemd/README.md` for the admin-API call.
 
 ## Use
 

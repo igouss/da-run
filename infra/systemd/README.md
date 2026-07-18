@@ -35,7 +35,8 @@ curl -sS --cacert ~/.local/share/caddy/pki/authorities/local/root.crt \
      -d '{"uri":"http://fedora.mist-walleye.ts.net:9080/","force":true}'
 ```
 
-`force:true` is safe here only because the endpoint stays backward-compatible (it adds
-services, never removes handlers in-flight invocations need). Check for parked work first:
+`force:true` overwrites the deployment record at that URI — routine for this endpoint, which
+only ever grows (new services/handlers, never removals in-flight invocations need). Before
+forcing, confirm nothing is parked:
 `SELECT id, target, status FROM sys_invocation WHERE status != 'completed'` against
-`https://restate.homelab/query`.
+`https://restate.homelab/query` (`accept: application/json`).
