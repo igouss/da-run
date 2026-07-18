@@ -1,0 +1,27 @@
+[Unit]
+Description=da-steer — durable steer-request park for the da-run skill (ADR-0029)
+Documentation=https://github.com/igouss/da-run
+# Version-tracked in the repo at infra/systemd/; installed into
+# ~/.config/systemd/user/ as a symlink (see infra/systemd/README.md).
+# Registered with the homelab Restate as http://fedora.mist-walleye.ts.net:9080 —
+# re-register only if the port or host changes (a dead endpoint backs off and retries,
+# it does not need re-registration after a restart).
+After=network-online.target
+
+[Service]
+Type=simple
+# Adjust if the skill bundle is installed elsewhere (project-local .claude/skills, a clone).
+WorkingDirectory=%h/.claude/skills/da-run/services/da-steer
+# node via the fnm default alias — a stable path that survives node version bumps.
+# Runs the COMPILED service (npm run build), not tsx: fewer moving parts under systemd.
+ExecStart=%h/.local/share/fnm/aliases/default/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+# The park is Restate's job, not this process's: the service holds no state worth
+# preserving across a crash — Restate re-delivers suspended invocations on reconnect
+# (observed 2026-07-18: kill mid-park -> backing-off -> replayed clean on restart).
+NoNewPrivileges=true
+Nice=5
+
+[Install]
+WantedBy=default.target

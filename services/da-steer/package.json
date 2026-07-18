@@ -1,0 +1,20 @@
+{
+  "name": "da-steer",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Durable steer-request park for the da-run skill (ADR-0029)",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@restatedev/restate-sdk": "^1.5.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
