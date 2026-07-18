@@ -24,7 +24,7 @@ below is addressed from it:
 
 - `$SKILL_DIR/workflows/` — `da-stage.js`, `da-arm-pre.js`, `da-post-gate.js`
 - `$SKILL_DIR/algorithm/` — the factory: `CLAUDE.md`, `CONTEXT.md`, `references/`, `stages/`,
-  `bin/run`
+  `bin/run`, `bin/steer`
 
 Dependencies: `bb` (babashka) and `git` on PATH. If `bb` is missing, tell the user
 (`https://babashka.org` — single static binary) rather than improvising the setup by hand.
@@ -82,6 +82,23 @@ the result, not a problem to talk around. The gate prefers the target project's 
 **`all`**: run the sequence `design → tests → implement → verify → commit`, in order, stopping at
 the first failure: an agent stage whose workflow throws or reports `allAuditsPassed: false`, or a
 red gate. Never continue past a red verify into commit.
+
+## Steer-requests (a stage asking the operator)
+
+Any agent stage may pause by writing `stages/<NN>/output/STEER-REQUEST.md` (protocol:
+`$SKILL_DIR/algorithm/references/steering.md`) instead of completing. After every stage dispatch,
+run `bb "$SKILL_DIR/algorithm/bin/steer" check --run <run-dir>` — exit 3 means pending. Then:
+
+1. Relay the `## Question` and `## Options` to the user verbatim and ask for their decision.
+2. Write it under `## Answer` (or `bb "$SKILL_DIR/algorithm/bin/steer" resolve --run <run-dir>
+   --stage <NN> --answer "..."`), then re-dispatch the same stage — the answered steer binds
+   like the spec.
+3. If the run is parked durably (`DA_STEER_INGRESS` set, `bin/steer park` running), don't
+   block the session waiting: use a Monitor on `bin/steer check` (exit 0 = answered) or on
+   the Restate output endpoint, and continue when it fires.
+
+A steer pause is the operator's turn, not a failure — never retry the stage over an
+unanswered request, and never answer it yourself.
 
 ## Ordering guards
 

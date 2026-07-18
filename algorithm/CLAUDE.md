@@ -85,3 +85,10 @@ Each stage writes to its own `output/`. The next stage reads from there. If the 
 edits an output file between stages, you pick up the edits — that is how a run is steered.
 Do not read a later stage's output to "learn the pattern"; the `references/` are the only
 authority for how to build.
+
+## Steering (asking the operator)
+
+When a stage hits a **load-bearing ambiguity** it does not guess: it writes
+`output/STEER-REQUEST.md` and stops — the protocol (format, when to raise, how the answer
+binds) is `references/steering.md`, and it applies to **every** stage. An answered
+STEER-REQUEST.md already in your `output/` is operator steering: honor it like the spec.

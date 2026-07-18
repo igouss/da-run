@@ -1,0 +1,275 @@
+#!/usr/bin/env bb
+;; steer — the F7 human-contact channel (ADR-0029). A stage that cannot proceed writes
+;; stages/<NN>/output/STEER-REQUEST.md and stops; this tool detects, parks, and resolves
+;; those requests. The FILE is canonical (the ICM edit surface and the ADR-0010 meter
+;; event); Restate is the optional durable-park transport over it — answers arriving on
+;; either side are bridged to the other, so both records always converge.
+;;
+;;   bin/steer check   --run RUNDIR [--stage NN-name]     JSON report; exit 3 = pending
+;;   bin/steer park    --run RUNDIR [--stage NN-name]     block until every pending request
+;;                                                        is answered (Restate awakeable when
+;;                                                        DA_STEER_INGRESS is set, else poll
+;;                                                        the file) — the harnesses call this
+;;   bin/steer resolve --run RUNDIR --stage NN-name --answer TEXT
+;;                                                        write the answer into the file and,
+;;                                                        if parked, resolve the awakeable
+;;   bin/steer --selftest
+;;
+;; Env: DA_STEER_INGRESS (e.g. https://restate-ingress.homelab; unset = file-only mode),
+;;      RESTATE_CA (default ~/.local/share/caddy/pki/authorities/local/root.crt).
+
+(require '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[cheshire.core :as json])
+
+;; ---- pure core -----------------------------------------------------------
+
+(defn section
+  "The text under `## <heading>` up to the next `## ` or EOF; nil when the heading is absent."
+  [content heading]
+  (when content
+    (when-let [m (re-find (re-pattern (str "(?ms)^## " heading "\\s*$(.*?)(?=^## |\\z)")) content)]
+      (str/trim (second m)))))
+
+(defn answered?
+  "A steer file is answered when its ## Answer section holds real text."
+  [content]
+  (not (str/blank? (or (section content "Answer") ""))))
+
+(defn with-answer
+  "Write `answer` into the ## Answer section (replacing whatever was there)."
+  [content answer]
+  (if (re-find #"(?m)^## Answer[ \t]*$" (or content ""))
+    (str/replace content #"(?ms)(^## Answer[ \t]*$).*?(?=^## |\z)" (str "$1\n\n" answer "\n"))
+    (str content "\n## Answer\n\n" answer "\n")))
+
+(defn steer-rel-path [stage] (str "stages/" stage "/output/STEER-REQUEST.md"))
+
+(defn wf-key
+  "Restate workflow key for one steer: run-id + stage, sanitized for a URL path."
+  [run-id stage]
+  (str/replace (str run-id "--" stage) #"[^A-Za-z0-9_-]" "-"))
+
+(defn start-payload [run-id stage content file]
+  {:runId run-id :stage stage
+   :question (or (section content "Question") "(no ## Question section)")
+   :options (or (section content "Options") "")
+   :file file})
+
+;; curl argv builders — pure so the selftest can pin the exact calls the shell makes.
+(defn curl-base [ca] ["curl" "-sS" "--max-time" "20" "--cacert" ca])
+(defn start-cmd
+  ;; no idempotency-key header: Restate REJECTS it on workflow handlers — the workflow key
+  ;; already dedupes (a second /run/send for the same key is a no-op conflict, which curl!
+  ;; tolerates).
+  [ca ingress key payload]
+  (conj (curl-base ca) "-X" "POST" (str ingress "/DaSteer/" key "/run/send")
+        "-H" "content-type: application/json"
+        "-d" (json/generate-string payload)))
+(defn awakeable-id-cmd [ca ingress key]
+  (conj (curl-base ca) "-X" "POST" (str ingress "/DaSteer/" key "/awakeableId")
+        "-H" "content-type: application/json" "-d" "{}"))
+(defn output-cmd [ca ingress key]
+  (conj (curl-base ca) "-o" "-" "-w" "\n%{http_code}"
+        (str ingress "/restate/workflow/DaSteer/" key "/output")))
+(defn resolve-cmd [ca ingress awakeable-id answer]
+  (conj (curl-base ca) "-X" "POST" (str ingress "/restate/awakeables/" awakeable-id "/resolve")
+        "-H" "content-type: application/json"
+        "-d" (json/generate-string {:answer answer})))
+
+(defn split-body-code
+  "curl -w '\\n%{http_code}' output -> [body http-code]."
+  [out]
+  (let [i (str/last-index-of (or out "") "\n")]
+    (if (and i (re-matches #"\d{3}" (subs out (inc i))))
+      [(subs out 0 i) (subs out (inc i))]
+      [(or out "") nil])))
+
+(defn workflow-answer
+  "The parked workflow's returned answer, when its output is ready. nil otherwise."
+  [body code]
+  (when (= "200" code)
+    (let [j (try (json/parse-string body true) (catch Exception _ nil))]
+      (cond (and (map? j) (:answer j)) (:answer j)
+            (string? j) j
+            :else nil))))
+
+(defn parse-flags
+  [argv]
+  (loop [xs argv, acc {}]
+    (if (empty? xs)
+      acc
+      (let [x (first xs)]
+        (cond
+          (= x "--selftest") (recur (rest xs) (assoc acc :cmd "selftest"))
+          (str/starts-with? x "--") (recur (drop 2 xs) (assoc acc (keyword (subs x 2)) (second xs)))
+          (not (:cmd acc)) (recur (rest xs) (assoc acc :cmd x))
+          :else (recur (rest xs) acc))))))
+
+;; ---- selftest ------------------------------------------------------------
+
+(def ^:private sample
+  "# STEER-REQUEST — 02-tests\n\n## Question\n\nWhich port?\n\n## Options\n\n- A: 9080\n- B: 9081\n\n## Answer\n\n")
+
+(defn selftest []
+  ;; section extraction: present, absent, last-section
+  (assert (= "Which port?" (section sample "Question")))
+  (assert (= "- A: 9080\n- B: 9081" (section sample "Options")))
+  (assert (nil? (section sample "Nonexistent")))
+  (assert (= "" (section sample "Answer")))
+  ;; answered?: empty, whitespace, real — zero/one path
+  (assert (not (answered? sample)))
+  (assert (not (answered? (str sample "  \n"))))
+  (assert (answered? (with-answer sample "use 9080")))
+  ;; with-answer: fills the empty section; replaces an existing answer; appends when missing
+  (assert (str/includes? (with-answer sample "use 9080") "## Answer\n\nuse 9080"))
+  (assert (str/includes? (with-answer (with-answer sample "old") "new") "new"))
+  (assert (not (str/includes? (with-answer (with-answer sample "old") "new") "old")))
+  (assert (str/includes? (with-answer "# no answer heading" "yes") "## Answer\n\nyes"))
+  ;; answer must not swallow a following section
+  (let [c "## Answer\n\n\n## Later\n\nkeep"]
+    (assert (str/includes? (with-answer c "a") "## Later"))
+    (assert (str/includes? (with-answer c "a") "keep")))
+  (assert (= "stages/02-tests/output/STEER-REQUEST.md" (steer-rel-path "02-tests")))
+  ;; wf-key sanitizes; deterministic
+  (assert (= "123-proj--02-tests" (wf-key "123-proj" "02-tests")))
+  (assert (= "a-b--01-design" (wf-key "a/b" "01-design")))
+  (let [pl (start-payload "r1" "02-tests" sample "/x/STEER-REQUEST.md")]
+    (assert (= "Which port?" (:question pl)))
+    (assert (= "r1" (:runId pl))))
+  ;; curl builders pin their shapes
+  (assert (str/includes? (str/join " " (start-cmd "/ca" "https://i" "k" {:a 1})) "/DaSteer/k/run/send"))
+  ;; no idempotency-key header — Restate rejects it on workflow handlers (key = idempotency)
+  (assert (not (str/includes? (str/join " " (start-cmd "/ca" "https://i" "k" {:a 1})) "idempotency-key")))
+  (assert (str/includes? (str/join " " (awakeable-id-cmd "/ca" "https://i" "k")) "/DaSteer/k/awakeableId"))
+  (assert (str/includes? (str/join " " (output-cmd "/ca" "https://i" "k")) "/restate/workflow/DaSteer/k/output"))
+  (assert (str/includes? (str/join " " (resolve-cmd "/ca" "https://i" "aw_1" "yes")) "/restate/awakeables/aw_1/resolve"))
+  ;; body/code splitting: well-formed, no code, empty
+  (assert (= ["{\"x\":1}" "200"] (split-body-code "{\"x\":1}\n200")))
+  (assert (= ["no code here" nil] (split-body-code "no code here")))
+  (assert (= ["" nil] (split-body-code "")))
+  ;; workflow-answer: ready map, ready bare string, not-ready, garbage
+  (assert (= "use A" (workflow-answer "{\"answer\":\"use A\"}" "200")))
+  (assert (= "plain" (workflow-answer "\"plain\"" "200")))
+  (assert (nil? (workflow-answer "{\"answer\":\"x\"}" "470")))
+  (assert (nil? (workflow-answer "not json" "200")))
+  (let [f (parse-flags ["park" "--run" "/r" "--stage" "02-tests"])]
+    (assert (= "park" (:cmd f)))
+    (assert (= "02-tests" (:stage f))))
+  (assert (= "yes" (:answer (parse-flags ["resolve" "--answer" "yes"]))))
+  (println (json/generate-string {:selftest "ok"})))
+
+;; ---- shell ---------------------------------------------------------------
+
+(defn ca-path []
+  (or (System/getenv "RESTATE_CA")
+      (str (fs/home) "/.local/share/caddy/pki/authorities/local/root.crt")))
+(defn ingress [] (System/getenv "DA_STEER_INGRESS"))
+
+(defn run-id-of [run-dir]
+  (:run-id (clojure.edn/read-string (slurp (str run-dir "/run.edn")))))
+
+(defn steer-files
+  "All steer files in the run (or just `stage`'s): [{:stage :file :content :answered}]."
+  [run-dir stage]
+  (for [d (sort-by str (fs/list-dir (str run-dir "/stages")))
+        :when (fs/directory? d)
+        :let [s (str (fs/file-name d))]
+        :when (or (nil? stage) (= s stage))
+        :let [f (str run-dir "/" (steer-rel-path s))]
+        :when (fs/exists? f)
+        :let [c (slurp f)]]
+    {:stage s :file f :content c :answered (answered? c)}))
+
+(defn curl! [argv] (let [{:keys [out exit]} (apply p/sh argv)] {:out (or out "") :exit exit}))
+
+(defn restate-start!
+  "Idempotently start the DaSteer workflow for one steer; return its key."
+  [run-dir {:keys [stage content file]}]
+  (let [key (wf-key (run-id-of run-dir) stage)]
+    (curl! (start-cmd (ca-path) (ingress) key (start-payload (run-id-of run-dir) stage content file)))
+    key))
+
+(defn restate-answer
+  "The workflow's answer if the operator resolved it on the Restate side; nil otherwise."
+  [key]
+  (let [{:keys [out]} (curl! (output-cmd (ca-path) (ingress) key))
+        [body code] (split-body-code out)]
+    (workflow-answer body code)))
+
+(defn restate-resolve!
+  "Best-effort: resolve the parked awakeable so the durable record completes too."
+  [key answer]
+  (let [{:keys [out]} (curl! (awakeable-id-cmd (ca-path) (ingress) key))
+        id (try (let [j (json/parse-string (str/trim out) true)]
+                  (if (string? j) j (:awakeableId j)))
+                (catch Exception _ nil))]
+    (when (and id (string? id) (seq id))
+      (curl! (resolve-cmd (ca-path) (ingress) id answer)))))
+
+(defn cmd-check [{:keys [run stage]}]
+  (when-not run (throw (ex-info "check needs --run RUNDIR" {})))
+  (let [all (vec (steer-files run stage))
+        pending (filterv (complement :answered) all)]
+    (println (json/generate-string
+              {:run run
+               :pending (mapv #(select-keys % [:stage :file]) pending)
+               :answered (mapv :stage (filterv :answered all))}))
+    (System/exit (if (seq pending) 3 0))))
+
+(defn park-one!
+  "Block until this steer is answered. With an ingress: durable park + two-way bridge.
+   Without: poll the file. Returns the answer."
+  [run-dir {:keys [stage file] :as sf}]
+  (let [key (when (ingress) (restate-start! run-dir sf))]
+    (when key (println (str "  parked durably: DaSteer/" key " (answer in the file, via "
+                            "`bin/steer resolve`, or in the Restate UI)")))
+    (loop []
+      (let [c (slurp file)]
+        (cond
+          (answered? c)
+          (let [ans (section c "Answer")]
+            (when key (restate-resolve! key ans))   ; file answered first -> complete the durable record
+            ans)
+          :else
+          (if-let [ans (and key (restate-answer key))]
+            (do (spit file (with-answer c ans)) ans) ; Restate answered first -> write the file record
+            (do (Thread/sleep 5000) (recur))))))))
+
+(defn cmd-park [{:keys [run stage]}]
+  (when-not run (throw (ex-info "park needs --run RUNDIR" {})))
+  (let [pending (remove :answered (steer-files run stage))]
+    (if (empty? pending)
+      (println (json/generate-string {:parked 0 :note "no pending steer-requests"}))
+      (doseq [sf pending]
+        (println (str "── steer pending: " (:stage sf) " — waiting for the operator ──"))
+        (let [ans (park-one! run sf)]
+          (println (json/generate-string {:stage (:stage sf) :answered true :answer ans})))))))
+
+(defn cmd-resolve [{:keys [run stage answer]}]
+  (when-not (and run stage answer) (throw (ex-info "resolve needs --run --stage --answer" {})))
+  (let [f (str run "/" (steer-rel-path stage))]
+    (when-not (fs/exists? f) (throw (ex-info (str "no steer-request at " f) {})))
+    (spit f (with-answer (slurp f) answer))
+    (when (ingress) (restate-resolve! (wf-key (run-id-of run) stage) answer))
+    (println (json/generate-string {:resolved stage :file f}))))
+
+;; ---- dispatch ------------------------------------------------------------
+
+(try
+  (let [{:keys [cmd] :as flags} (parse-flags *command-line-args*)]
+    (case cmd
+      "selftest" (selftest)
+      "check"    (cmd-check flags)
+      "park"     (cmd-park flags)
+      "resolve"  (cmd-resolve flags)
+      (do (binding [*out* *err*]
+            (println "usage: bin/steer check   --run RUNDIR [--stage NN-name]   (exit 3 = pending)")
+            (println "       bin/steer park    --run RUNDIR [--stage NN-name]")
+            (println "       bin/steer resolve --run RUNDIR --stage NN-name --answer TEXT")
+            (println "       bin/steer --selftest"))
+          (System/exit 2))))
+  (catch clojure.lang.ExceptionInfo e
+    (binding [*out* *err*] (println "error:" (ex-message e)))
+    (System/exit 2)))

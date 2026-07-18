@@ -23,6 +23,11 @@ const STAGE_SCHEMA = {
   properties: {
     filesWritten: { type: 'array', items: { type: 'string' } },
     auditPassed: { type: 'boolean' },
+    steerRequested: {
+      type: 'boolean',
+      description:
+        'true ONLY if you wrote output/STEER-REQUEST.md per the steering protocol (references/steering.md) and stopped without completing the stage',
+    },
     summary: { type: 'string' },
   },
   required: ['auditPassed', 'filesWritten'],
@@ -56,41 +61,42 @@ const APPLY_SCHEMA = {
   required: ['applied'],
 }
 
+// Stage prompts are POINTERS, never paraphrases (F2 / own-your-prompts): the stage's
+// CONTEXT.md is the single home of what to load, how to work, and what to write. Restating
+// any of it here would let a contract clause survive its own deletion (the JS copy would
+// still carry it), blinding the contract-mutation rot oracle (ADR-0012/0027).
+function stagePrompt(runDir, stageDir) {
+  return (
+    `You are running ONLY stage ${stageDir} of a directory-algorithm run. Read ` +
+    `${runDir}/CLAUDE.md (identity + folder map), then ${runDir}/stages/${stageDir}/CONTEXT.md — ` +
+    `that is your ENTIRE contract: load only what its Inputs table names, do its Process, run ` +
+    `its Audit before writing, and write exactly its Outputs. Prior stages' outputs are under ` +
+    `${runDir}/stages/*/output/; the codebase under change is ${runDir}/worktree; run metadata ` +
+    `is in ${runDir}/run.edn. Do not redo an earlier stage or start a later one.\n\n` +
+    `Constraints (isolated experiment run): operate ONLY within the run dir and its worktree; ` +
+    `never \`git push\`; never touch \`main\` or any other checkout; never flash hardware, call ` +
+    `a live endpoint, or read/use any bearer token.`
+  )
+}
+
 function designPrompt(runDir, review) {
-  const base =
-    `Stage 01 — design. Read ${runDir}/CLAUDE.md then ${runDir}/stages/01-design/CONTEXT.md — ` +
-    `that is your contract. Load only what it names: the spec at ${runDir}/spec.md, the parts of ` +
-    `${runDir}/worktree the change touches, and ${runDir}/references/architecture.md. Run the ` +
-    `Audit before writing, then write ${runDir}/stages/01-design/output/design.md.`
+  const base = stagePrompt(runDir, '01-design')
   if (!review) return base
   return (
-    `Stage 01 — design REVIEW pass. A design already exists at ` +
-    `${runDir}/stages/01-design/output/design.md. Re-read it against the spec and the contract ` +
-    `at ${runDir}/stages/01-design/CONTEXT.md. Revise it in place if the Audit finds a gap; leave ` +
-    `it unchanged if it already passes. Either way, re-run the Audit and confirm the final file ` +
-    `passes before finishing.`
+    base +
+    `\n\nThis is a REVIEW pass: a design already exists at ` +
+    `${runDir}/stages/01-design/output/design.md. Re-read it against your contract; revise it in ` +
+    `place where the Audit finds a gap, leave it unchanged where it already passes — then re-run ` +
+    `the Audit on the final file.`
   )
 }
 
 function testsPrompt(runDir) {
-  return (
-    `Stage 02 — tests. Read ${runDir}/stages/02-tests/CONTEXT.md — your contract. Load the design ` +
-    `at ${runDir}/stages/01-design/output/design.md, the spec at ${runDir}/spec.md, ` +
-    `${runDir}/worktree, and ${runDir}/references/testing.md. Write failing tests into the ` +
-    `worktree and ${runDir}/stages/02-tests/output/test-plan.md. Confirm the suite is red for the ` +
-    `right reason before writing output.`
-  )
+  return stagePrompt(runDir, '02-tests')
 }
 
 function implementPrompt(runDir) {
-  return (
-    `Stage 03 — implement. Read ${runDir}/stages/03-implement/CONTEXT.md — your contract. Load ` +
-    `the design, the stage-02 tests, ${runDir}/worktree, and ` +
-    `${runDir}/references/rust-standards.md. Modify the worktree so the stage-02 tests pass, ` +
-    `walk the design's requirement ledger against your diff, then write ` +
-    `${runDir}/stages/03-implement/output/completeness.md and change-note.md. Leave the change ` +
-    `uncommitted — a later stage commits it.`
-  )
+  return stagePrompt(runDir, '03-implement')
 }
 
 function attemptPrompt(runDir, index) {
@@ -173,6 +179,13 @@ const results = []
 for (const spec of args.stageList) {
   phase(spec.kind)
   const r = await runStage(spec)
+  if (r && r.steerRequested) {
+    // F7 (ADR-0029): the stage is ASKING, not failing. Return cleanly — the harness detects
+    // the unanswered STEER-REQUEST.md on disk (the file is canonical, not this flag), parks
+    // or pauses for the operator, and re-dispatches the remaining stages after the answer.
+    log(`stage "${spec.kind}" paused on a steer-request — returning for the operator`)
+    return { stagesRun: results.map((x) => x.kind), steerPaused: spec.kind, allAuditsPassed: false }
+  }
   if (!r || r.auditPassed === false) {
     throw new Error(`stage "${spec.kind}" did not pass its Audit — stopping the arm before the gate`)
   }

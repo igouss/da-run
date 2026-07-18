@@ -55,7 +55,7 @@
           :else (recur (rest xs) acc))))))
 
 (defn manifest
-  [{:keys [run-id project branch base-commit algorithm-version contracts spec arm round created phase]}]
+  [{:keys [run-id project branch base-commit algorithm-version contracts spec arm round created phase steers]}]
   {:run-id run-id
    :arm arm
    :round round
@@ -63,7 +63,10 @@
    :created created
    :target {:project project :branch branch :base-commit base-commit}
    :algorithm {:version algorithm-version :contracts contracts}
-   :spec spec})
+   :spec spec
+   ;; F7/ADR-0029: steer-requests raised during the run — correction-steer events on the
+   ;; ADR-0010 meter, frozen with the record so the ratchet can be computed later.
+   :steers {:count (count (or steers [])) :stages (vec (or steers []))}})
 
 ;; ---- selftest ------------------------------------------------------------
 
@@ -84,8 +87,13 @@
                      :round "round-0" :created "t"})]
     (assert (= "abc" (get-in m [:target :base-commit])))
     (assert (= ["CLAUDE.md"] (get-in m [:algorithm :contracts])))
-    (assert (= "steady-state" (:phase m))))                          ; defaults when unset
+    (assert (= "steady-state" (:phase m)))                           ; defaults when unset
+    (assert (= 0 (get-in m [:steers :count]))))                      ; zero steers -> counted zero
   (assert (= "convergence" (:phase (manifest {:phase "convergence"})))) ; passes through
+  (let [m (manifest {:steers ["02-tests"]})]                         ; one steer
+    (assert (= 1 (get-in m [:steers :count])))
+    (assert (= ["02-tests"] (get-in m [:steers :stages]))))
+  (assert (= 2 (get-in (manifest {:steers ["01-design" "02-tests"]}) [:steers :count]))) ; many
   (println (json/generate-string {:selftest "ok"})))
 
 ;; ---- shell helpers -------------------------------------------------------
@@ -164,14 +172,29 @@
                   (if (fs/exists? g) (slurp g) "(no gate report produced this run)"))
         session-dir (str (fs/home) "/.claude/projects/" (munge-cwd run))
         traces  (when (fs/exists? session-dir)
-                  (->> (fs/glob session-dir "*.jsonl") (map str) vec))]
+                  (->> (fs/glob session-dir "*.jsonl") (map str) vec))
+        ;; F7/ADR-0029: steer-requests are meter events — freeze each file with the record
+        steers  (vec (for [d (sort-by str (fs/list-dir (str run "/stages")))
+                           :when (fs/directory? d)
+                           :let [f (str d "/output/STEER-REQUEST.md")]
+                           :when (fs/exists? f)]
+                       {:stage (str (fs/file-name d)) :file f}))]
     (fs/create-dirs (str out-dir "/traces"))
+    ;; retries are cost data (F9): freeze the harness's retry log with the record
+    (let [rl (str run "/retry-log.edn")]
+      (when (fs/exists? rl)
+        (fs/copy rl (str out-dir "/retry-log.edn") {:replace-existing true})))
+    (when (seq steers)
+      (fs/create-dirs (str out-dir "/steers"))
+      (doseq [{:keys [stage file]} steers]
+        (fs/copy file (str out-dir "/steers/" stage ".md") {:replace-existing true})))
     (spit (str out-dir "/manifest.json")
           (json/generate-string
            (manifest {:run-id rid :project (:project cfg) :branch (:branch cfg)
                       :base-commit (:base-commit cfg) :algorithm-version (:algorithm-version cfg)
                       :contracts (:contracts cfg) :spec (:spec cfg) :arm (:arm cfg)
-                      :round round :phase (:phase cfg) :created (:created cfg)})
+                      :round round :phase (:phase cfg) :created (:created cfg)
+                      :steers (mapv :stage steers)})
            {:pretty true}))
     (spit (str out-dir "/result.patch") patch)
     (spit (str out-dir "/gate-report.md") greport)
