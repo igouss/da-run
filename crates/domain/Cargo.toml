@@ -1,0 +1,14 @@
+[package]
+name = "da-domain"
+version.workspace = true
+edition.workspace = true
+description = "Ring 0: the run-state machine — pure, sync, no I/O"
+
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+
+[lints]
+workspace = true

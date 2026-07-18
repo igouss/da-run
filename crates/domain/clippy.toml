@@ -1,0 +1,11 @@
+disallowed-methods = [
+    "std::time::SystemTime::now",
+    "std::time::Instant::now",
+    "std::env::var",
+    "std::env::vars",
+    "std::fs::read",
+    "std::fs::read_to_string",
+    "std::fs::write",
+    "std::fs::File::open",
+    "std::fs::File::create",
+]

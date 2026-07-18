@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/domain",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+
+[workspace.dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+ureq = "2"
+proptest = "1"
+tempfile = "3"
+insta = { version = "1", features = ["json"] }
+da-domain = { path = "crates/domain" }
+da-ports = { path = "crates/ports" }
+da-app = { path = "crates/app" }
+da-adapter-fs = { path = "crates/adapter-fs" }
+da-adapter-restate = { path = "crates/adapter-restate" }
+da-wire = { path = "crates/wire" }
