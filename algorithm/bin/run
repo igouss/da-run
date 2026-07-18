@@ -1,0 +1,203 @@
+#!/usr/bin/env bb
+;; run — the directory-algorithm run driver. Two phases, operator in the loop.
+;;
+;;   bin/run setup   --project P --spec S [--arm folder] [--round R]
+;;       Generate a run instance under the run root, snapshot the algorithm files, add a
+;;       git worktree of P on a fresh branch, and print how to drive it. Refuses on a
+;;       dirty target working tree — commit or stash first.
+;;       Run root = $DA_RUN_ROOT, else ~/.cache/directory-algorithm/runs. NOT /tmp: a
+;;       real-disk root is required — builds (esp-idf toolchain + cargo target, many GB)
+;;       overflow a small RAM-backed tmpfs and hit its quota.
+;;   bin/run capture --run RUNDIR [--round R]
+;;       Assemble the immutable run record (manifest, result.patch, gate-report, traces)
+;;       under <records-root>/experiments/<round>/runs/<run-id>/ (records-root =
+;;       $DA_RECORDS, else the trial repo ~/code/directory-algorithm-trial).
+;;   bin/run --selftest
+;;
+;; Provenance model: ADR-0006. code -> the project's git; ephemera -> the run dir;
+;; provenance + traces -> the frozen run record.
+
+(require '[clojure.string :as str]
+         '[clojure.edn :as edn]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[cheshire.core :as json])
+
+;; ---- pure core -----------------------------------------------------------
+
+(defn munge-cwd
+  "Claude Code stores a session under ~/.claude/projects/<munged cwd>/."
+  [path]
+  (str/replace (str path) #"[^A-Za-z0-9]" "-"))
+
+(defn run-id [project-name millis] (str millis "-" project-name))
+
+(defn branch-name [rid] (str "da/" rid))
+
+(defn working-tree-dirty?
+  "True when `git status --porcelain` output signals uncommitted or untracked
+   changes; a blank result means a clean tree."
+  [porcelain]
+  (not (str/blank? porcelain)))
+
+(defn parse-flags
+  "argv -> {:cmd s, <flag-keyword> value ...}. First non---flag token is :cmd."
+  [argv]
+  (loop [xs argv, acc {}]
+    (if (empty? xs)
+      acc
+      (let [x (first xs)]
+        (cond
+          (= x "--selftest") (recur (rest xs) (assoc acc :cmd "selftest"))
+          (str/starts-with? x "--") (recur (drop 2 xs)
+                                           (assoc acc (keyword (subs x 2)) (second xs)))
+          (not (:cmd acc)) (recur (rest xs) (assoc acc :cmd x))
+          :else (recur (rest xs) acc))))))
+
+(defn manifest
+  [{:keys [run-id project branch base-commit algorithm-version contracts spec arm round created phase]}]
+  {:run-id run-id
+   :arm arm
+   :round round
+   :phase (or phase "steady-state")   ; convergence (evolving to settle) vs steady-state (one clean run)
+   :created created
+   :target {:project project :branch branch :base-commit base-commit}
+   :algorithm {:version algorithm-version :contracts contracts}
+   :spec spec})
+
+;; ---- selftest ------------------------------------------------------------
+
+(defn selftest []
+  (assert (= "-tmp-run-1" (munge-cwd "/tmp/run 1")))
+  (assert (= "123-proj" (run-id "proj" 123)))
+  (assert (= "da/123-proj" (branch-name (run-id "proj" 123))))
+  (assert (not (working-tree-dirty? "")))               ; zero changes -> clean
+  (assert (working-tree-dirty? " M Cargo.toml"))        ; one change   -> dirty
+  (assert (working-tree-dirty? " M a\n?? b/\n M c"))     ; many changes -> dirty
+  (let [f (parse-flags ["setup" "--project" "/p" "--arm" "folder"])]
+    (assert (= "setup" (:cmd f)))
+    (assert (= "/p" (:project f)))
+    (assert (= "folder" (:arm f))))
+  (assert (= "capture" (:cmd (parse-flags ["capture" "--run" "/r"]))))
+  (let [m (manifest {:run-id "r" :project "/p" :branch "da/r" :base-commit "abc"
+                     :algorithm-version "v" :contracts ["CLAUDE.md"] :spec "s" :arm "folder"
+                     :round "round-0" :created "t"})]
+    (assert (= "abc" (get-in m [:target :base-commit])))
+    (assert (= ["CLAUDE.md"] (get-in m [:algorithm :contracts])))
+    (assert (= "steady-state" (:phase m))))                          ; defaults when unset
+  (assert (= "convergence" (:phase (manifest {:phase "convergence"})))) ; passes through
+  (println (json/generate-string {:selftest "ok"})))
+
+;; ---- shell helpers -------------------------------------------------------
+
+(defn sh [& args]
+  (let [{:keys [out err exit]} (apply p/sh args)]
+    {:out (str/trim (or out "")) :err (str/trim (or err "")) :exit exit}))
+
+(defn repo-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
+
+(defn records-root [] (or (System/getenv "DA_RECORDS")
+                          (str (fs/home) "/code/directory-algorithm-trial")))
+
+(def algorithm-files ["CLAUDE.md" "CONTEXT.md" "references" "stages"])
+
+;; ---- setup ---------------------------------------------------------------
+
+(defn setup [{:keys [project spec arm round phase]}]
+  (when-not (and project spec) (throw (ex-info "setup needs --project and --spec" {})))
+  (let [repo    (repo-root)
+        project (str (fs/absolutize project))
+        status  (sh "git" "-C" project "status" "--porcelain")
+        arm     (or arm "folder")
+        round   (or round "round-0")
+        phase   (or phase "steady-state")
+        pname   (str (fs/file-name project))
+        millis  (System/currentTimeMillis)
+        rid     (run-id pname millis)
+        branch  (branch-name rid)
+        run-root (or (System/getenv "DA_RUN_ROOT")
+                     (str (fs/home) "/.cache/directory-algorithm/runs"))
+        run-dir (str run-root "/" rid)
+        wt      (str run-dir "/worktree")
+        base    (:out (sh "git" "-C" project "rev-parse" "HEAD"))
+        algver  (let [r (sh "git" "-C" repo "rev-parse" "--short" "HEAD")]
+                  (if (zero? (:exit r)) (:out r) "uncommitted-working-tree"))]
+    (when-not (zero? (:exit status))
+      (throw (ex-info (str "not a git repository (or git failed) at " project
+                           (when (seq (:err status)) (str ": " (:err status)))) {})))
+    (when (working-tree-dirty? (:out status))
+      (throw (ex-info (str "refusing to run — the target project has uncommitted changes.\n"
+                           "Commit or stash them first: the worktree branches from HEAD, so "
+                           "uncommitted or untracked files are silently excluded from the run's "
+                           "baseline.\n\n" (:out status)) {})))
+    (fs/create-dirs run-dir)
+    (doseq [f algorithm-files]
+      (let [src (str repo "/" f), dst (str run-dir "/" f)]
+        (if (fs/directory? src)
+          (fs/copy-tree src dst {:replace-existing true})
+          (fs/copy src dst {:replace-existing true}))))
+    (fs/copy (str (fs/absolutize spec)) (str run-dir "/spec.md") {:replace-existing true})
+    (let [r (sh "git" "-C" project "worktree" "add" "-b" branch wt "HEAD")]
+      (when-not (zero? (:exit r)) (throw (ex-info (str "git worktree add failed: " (:err r)) {}))))
+    (spit (str run-dir "/run.edn")
+          (pr-str {:run-id rid :project project :branch branch :base-commit base
+                   :algorithm-version algver :contracts algorithm-files
+                   :spec (str (fs/absolutize spec)) :arm arm :round round :phase phase
+                   :created (str (java.time.Instant/ofEpochMilli millis))}))
+    (println (json/generate-string
+              {:run-id rid :run-dir run-dir :worktree wt :branch branch
+               :next ["cd the run dir and open Claude Code there"
+                      (str "the agent reads CLAUDE.md then CONTEXT.md; the codebase is ./worktree")
+                      (str "when done: bin/run capture --run " run-dir)]}))))
+
+;; ---- capture -------------------------------------------------------------
+
+(defn capture [{:keys [run round]}]
+  (when-not run (throw (ex-info "capture needs --run RUNDIR" {})))
+  (let [cfg     (edn/read-string (slurp (str run "/run.edn")))
+        round   (or round (:round cfg))
+        rid     (:run-id cfg)
+        wt      (str run "/worktree")
+        out-dir (str (records-root) "/experiments/" round "/runs/" rid)
+        patch   (:out (sh "git" "-C" wt "diff" (:base-commit cfg)))
+        greport (let [g (str run "/stages/04-verify/output/gate-report.md")]
+                  (if (fs/exists? g) (slurp g) "(no gate report produced this run)"))
+        session-dir (str (fs/home) "/.claude/projects/" (munge-cwd run))
+        traces  (when (fs/exists? session-dir)
+                  (->> (fs/glob session-dir "*.jsonl") (map str) vec))]
+    (fs/create-dirs (str out-dir "/traces"))
+    (spit (str out-dir "/manifest.json")
+          (json/generate-string
+           (manifest {:run-id rid :project (:project cfg) :branch (:branch cfg)
+                      :base-commit (:base-commit cfg) :algorithm-version (:algorithm-version cfg)
+                      :contracts (:contracts cfg) :spec (:spec cfg) :arm (:arm cfg)
+                      :round round :phase (:phase cfg) :created (:created cfg)})
+           {:pretty true}))
+    (spit (str out-dir "/result.patch") patch)
+    (spit (str out-dir "/gate-report.md") greport)
+    (doseq [t (or traces [])]
+      (fs/copy t (str out-dir "/traces/" (fs/file-name t)) {:replace-existing true}))
+    (println (json/generate-string
+              {:run-id rid :record out-dir
+               :patch-bytes (count patch)
+               :traces-copied (count (or traces []))
+               :traces-note (when-not traces
+                              (str "no Claude session found at " session-dir
+                                   " — attach traces manually"))}))))
+
+;; ---- dispatch ------------------------------------------------------------
+
+(try
+  (let [{:keys [cmd] :as flags} (parse-flags *command-line-args*)]
+    (case cmd
+      "selftest" (selftest)
+      "setup"    (setup flags)
+      "capture"  (capture flags)
+      (do (binding [*out* *err*]
+            (println "usage: bin/run setup --project P --spec S [--arm folder] [--round R]")
+            (println "       bin/run capture --run RUNDIR [--round R]")
+            (println "       bin/run --selftest"))
+          (System/exit 2))))
+  (catch clojure.lang.ExceptionInfo e
+    (binding [*out* *err*] (println "error:" (ex-message e)))
+    (System/exit 2)))
