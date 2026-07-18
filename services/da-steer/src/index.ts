@@ -21,6 +21,36 @@ type Steering = {
   notes?: string;
 };
 
+// The non-authoritative run mirror: `da-state notify` publishes the derived
+// state (wire payload v1) after status/check; anything on the tailnet can read
+// it without touching the run dir. Last-writer-wins — the filesystem stays
+// canonical, so a stale mirror is a display problem, never a truth problem.
+type DerivedState = {
+  v: number;
+  run_id: string;
+  state: string;
+  phase: string;
+  parked: string[];
+  anomalies: unknown[];
+};
+
+const daRun = restate.object({
+  name: "DaRun",
+  handlers: {
+    recordState: async (
+      ctx: restate.ObjectContext,
+      derived: DerivedState
+    ): Promise<void> => {
+      ctx.set("state", derived);
+    },
+
+    getState: restate.handlers.object.shared(
+      async (ctx: restate.ObjectSharedContext): Promise<DerivedState | null> =>
+        (await ctx.get<DerivedState>("state")) ?? null
+    ),
+  },
+});
+
 const daSteer = restate.workflow({
   name: "DaSteer",
   handlers: {
@@ -46,4 +76,4 @@ const daSteer = restate.workflow({
   },
 });
 
-restate.endpoint().bind(daSteer).listen(9080);
+restate.endpoint().bind(daSteer).bind(daRun).listen(9080);
