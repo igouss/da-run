@@ -61,7 +61,8 @@ args (absolute paths only):
 
 ```json
 { "runDir": "<absolute run dir>", "stage": "<stage>", "round": "ad-hoc",
-  "workflowsDir": "<SKILL_DIR>/workflows", "attempts": <N-if-given> }
+  "workflowsDir": "<SKILL_DIR>/workflows", "attempts": <N-if-given>,
+  "stateCheck": <the JSON printed by the ordering-guard check below> }
 ```
 
 `workflowsDir` is required here — without it `da-stage.js` falls back to a project-local
@@ -106,15 +107,23 @@ unanswered request, and never answer it yourself.
 
 ## Ordering guards
 
-Refuse (with a one-line explanation) any dispatch that violates the pipeline's handoff order:
+The run-state machine `bin/state` is the authority on dispatch order — do not re-derive its
+rules from prose. Before **any** Step-2 dispatch, run:
 
-- `tests` before `stages/01-design/output/` has a design.
-- `implement` before `stages/02-tests/output/` has a test plan.
-- `commit` before `stages/04-verify/output/gate-report.md` shows `GATE GREEN`.
+```sh
+bash "$SKILL_DIR/algorithm/bin/state" check --run <run-dir> <stage>
+```
 
-`design` and `design-review` may always run; `design-review` warns if there is no design yet to
-review. The operator can steer between stages by editing any `output/` file — that is the point
-of running one stage at a time.
+- exit 0 — allowed: dispatch, passing the printed JSON as `stateCheck` in the workflow args
+  (Step 2); relay any advisory `warnings`.
+- exit 4 — refused: relay the JSON `reason.detail` verbatim and stop.
+- exit 3 — a steer-request is pending: enter the steer flow above; never dispatch over it.
+- exit 2 — broken run dir: relay the error.
+
+The operator can steer between stages by editing any `output/` file — that is the point of
+running one stage at a time; a re-dispatch of a complete stage is a warning, never a refusal.
+`bash "$SKILL_DIR/algorithm/bin/state" status --run <run-dir> --pretty` renders the whole
+pipeline (state, gate verdict, parked steers) whenever you need the picture.
 
 ## After the run (optional)
 

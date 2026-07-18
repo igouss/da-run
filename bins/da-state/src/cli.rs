@@ -40,6 +40,8 @@ pub enum DispatchArg {
     DesignReview,
     Tests,
     Implement,
+    /// Same rules as implement — the attempt count is da-stage.js's concern.
+    ImplementParallelAttempt,
     Verify,
     Commit,
 }
@@ -50,9 +52,11 @@ impl DispatchArg {
             DispatchArg::Design => Dispatch::Design,
             DispatchArg::DesignReview => Dispatch::DesignReview,
             DispatchArg::Tests => Dispatch::Tests,
-            DispatchArg::Implement => Dispatch::Implement {
-                parallel_attempts: None,
-            },
+            DispatchArg::Implement | DispatchArg::ImplementParallelAttempt => {
+                Dispatch::Implement {
+                    parallel_attempts: None,
+                }
+            }
             DispatchArg::Verify => Dispatch::Verify,
             DispatchArg::Commit => Dispatch::Commit,
         }

@@ -156,6 +156,7 @@
               {:run-id rid :run-dir run-dir :worktree wt :branch branch
                :next ["cd the run dir and open Claude Code there"
                       (str "the agent reads CLAUDE.md then CONTEXT.md; the codebase is ./worktree")
+                      (str "status any time: bin/state status --run " run-dir " --pretty")
                       (str "when done: bin/run capture --run " run-dir)]}))))
 
 ;; ---- capture -------------------------------------------------------------

@@ -39,12 +39,15 @@ the design, the test plan, the gate report, and the commit record.
 
 | Keyword | Action |
 |---------|--------|
-| `status` | Scan `stages/*/output/`. A stage with files (beyond `.gitkeep`) is COMPLETE, else PENDING. Render the pipeline. |
+| `status` | Run `bash <skill>/algorithm/bin/state status --run . --pretty` (the run-state authority) and render its output. |
 
 ### How `status` works
 
-`01-design ---> 02-tests ---> 03-implement ---> 04-verify ---> 05-commit`, each labelled COMPLETE
-(list the files) or PENDING (empty / only `.gitkeep`).
+`bin/state` derives the pipeline from the filesystem: a stage with `output/` files (beyond
+`.gitkeep`, steer files excluded) is COMPLETE, else PENDING; it adds the gate verdict, parked
+steer-requests, and any anomalies. Fallback when `cargo` is unavailable: scan `stages/*/output/`
+by the same rule and render
+`01-design ---> 02-tests ---> 03-implement ---> 04-verify ---> 05-commit` by hand.
 
 ## Routing
 
