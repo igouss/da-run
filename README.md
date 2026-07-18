@@ -54,6 +54,11 @@ Gherkin scenario in the spec. The result lands on its own branch — never on `m
 Every stage refuses to run out of order — `tests` before a design exists, `commit` before the
 gate is green — with a one-line explanation instead of silently doing the wrong thing.
 
+`change-spec.md` above is any frozen spec in your own format. For a worked, full-length example —
+including the messy problem statement and elicitation exchange that produced it — see
+[`example-feature-spec.md`](example-feature-spec.md) and its companion
+[`example-spec-prompt.md`](example-spec-prompt.md).
+
 ## Design philosophy
 
 - **The folder is the algorithm.** There's no framework or hidden state machine — `CLAUDE.md`,
