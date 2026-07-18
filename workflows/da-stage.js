@@ -33,10 +33,18 @@ const STAGE_MODELS = {
 
 const PRE_GATE_KINDS = ['design', 'design-review', 'tests', 'implement', 'implement-parallel-attempt']
 
-if (!args.runDir) throw new Error('da-stage needs args.runDir (an absolute run-instance path)')
-if (!args.stage) throw new Error('da-stage needs args.stage')
+// Some harnesses deliver args as a JSON string — normalize once at the boundary.
+const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 
-if (args.stage === 'verify') {
+if (!input.runDir) throw new Error('da-stage needs args.runDir (an absolute run-instance path)')
+if (!input.stage) throw new Error('da-stage needs args.stage')
+
+// The check JSON may itself arrive as a pasted string — same normalization.
+if (typeof input.stateCheck === 'string') {
+  try { input.stateCheck = JSON.parse(input.stateCheck) } catch { input.stateCheck = null }
+}
+
+if (input.stage === 'verify') {
   throw new Error(
     'da-stage refuses "verify": the mechanical gate is never a workflow (ADR-0028 §3). ' +
       'Run it yourself: (cd <runDir>/worktree && bash ../stages/04-verify/gate.sh), then read ' +
@@ -47,41 +55,41 @@ if (args.stage === 'verify') {
 // ADR-0028-adjacent honesty scaffolding: the caller must have run the run-state
 // authority and gotten "allowed". Advisory by design — the hard edges stay the
 // mechanical gate and the adversarial reviewer.
-if (!args.stateCheck || args.stateCheck.allowed !== true) {
+if (!input.stateCheck || input.stateCheck.allowed !== true) {
   throw new Error(
     'da-stage refuses to dispatch without a passing run-state check — run: ' +
-      `bash "$SKILL_DIR/algorithm/bin/state" check --run ${args.runDir} ${args.stage} ` +
+      `bash "$SKILL_DIR/algorithm/bin/state" check --run ${input.runDir} ${input.stage} ` +
       'and pass its printed JSON as args.stateCheck (SKILL.md §Ordering guards).'
   )
 }
 
-const model = args.model || STAGE_MODELS[args.stage]
+const model = input.model || STAGE_MODELS[input.stage]
 if (!model) {
   throw new Error(
-    `unknown stage "${args.stage}" — expected one of: ${PRE_GATE_KINDS.join(', ')}, commit`
+    `unknown stage "${input.stage}" — expected one of: ${PRE_GATE_KINDS.join(', ')}, commit`
   )
 }
 
-const wfDir = args.workflowsDir || '.claude/workflows'
+const wfDir = input.workflowsDir || '.claude/workflows'
 
 phase('Stage')
 
-if (args.stage === 'commit') {
+if (input.stage === 'commit') {
   // the atomized adversarial reviewer + the scoped commit, as one hard-gated unit — a caller
   // cannot reach the commit agent without the review passing (ADR-0027 #3 / ADR-0028 §2).
   const result = await workflow(
     { scriptPath: `${wfDir}/da-post-gate.js` },
-    { runDir: args.runDir, worktree: `${args.runDir}/worktree`, round: args.round || 'ad-hoc', commitModel: model }
+    { runDir: input.runDir, worktree: `${input.runDir}/worktree`, round: input.round || 'ad-hoc', commitModel: model }
   )
   return { stage: 'commit', ...result }
 }
 
-const stageSpec = { kind: args.stage, model }
-if (args.stage === 'implement-parallel-attempt' && args.attempts) stageSpec.attempts = args.attempts
+const stageSpec = { kind: input.stage, model }
+if (input.stage === 'implement-parallel-attempt' && input.attempts) stageSpec.attempts = input.attempts
 
 const result = await workflow(
   { scriptPath: `${wfDir}/da-arm-pre.js` },
-  { runDir: args.runDir, worktree: `${args.runDir}/worktree`, stageList: [stageSpec] }
+  { runDir: input.runDir, worktree: `${input.runDir}/worktree`, stageList: [stageSpec] }
 )
 
-return { stage: args.stage, model, ...result }
+return { stage: input.stage, model, ...result }
