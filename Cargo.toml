@@ -4,6 +4,7 @@ members = [
     "crates/domain",
     "crates/ports",
     "crates/app",
+    "crates/adapter-fs",
 ]
 
 [workspace.package]
