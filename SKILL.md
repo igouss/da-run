@@ -24,12 +24,14 @@ below is addressed from it:
 
 - `$SKILL_DIR/workflows/` — `da-stage.js`, `da-arm-pre.js`, `da-post-gate.js`
 - `$SKILL_DIR/algorithm/` — the factory: `CLAUDE.md`, `CONTEXT.md`, `references/`, `stages/`,
-  `bin/run`, `bin/steer`
+  `bin/run`, `bin/steer`, `bin/state`
 - `$SKILL_DIR/services/da-steer/` + `$SKILL_DIR/infra/systemd/` — optional durable-park
   service for steer-requests (Restate; see its README). Not needed for file-only steering.
 
-Dependencies: `bb` (babashka) and `git` on PATH. If `bb` is missing, tell the user
-(`https://babashka.org` — single static binary) rather than improvising the setup by hand.
+Dependencies: `bb` (babashka), `git`, and `cargo` on PATH. If `bb` is missing, tell the user
+(`https://babashka.org` — single static binary) rather than improvising the setup by hand;
+same for `cargo` (`https://rustup.rs`) — it builds `bin/state`, the run-state authority,
+on first use.
 
 ## Step 1 — resolve the run instance
 
