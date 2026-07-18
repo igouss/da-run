@@ -5,6 +5,8 @@ members = [
     "crates/ports",
     "crates/app",
     "crates/adapter-fs",
+    "crates/wire",
+    "bins/da-state",
 ]
 
 [workspace.package]

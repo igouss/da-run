@@ -1,0 +1,14 @@
+---
+source: crates/wire/tests/wire_shapes.rs
+expression: "CheckWire::allowed(&allowed)"
+---
+{
+  "v": 1,
+  "allowed": true,
+  "warnings": [
+    {
+      "code": "stage-already-complete",
+      "stage": "01-design"
+    }
+  ]
+}

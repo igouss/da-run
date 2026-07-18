@@ -1,4 +1,4 @@
-use da_domain::{Derived, FsFacts, StageId, derive};
+use da_domain::{Derived, FsFacts, RunId, StageId, Verdict, derive};
 use da_ports::{SnapshotError, SnapshotSource};
 use std::path::Path;
 
@@ -14,7 +14,10 @@ pub struct StageStatus {
 /// The full status view: derived summary plus per-stage detail.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StatusReport {
+    pub run_id: RunId,
     pub derived: Derived,
+    /// The raw gate verdict — visible even after the run reaches Committed.
+    pub gate: Option<Verdict>,
     pub stages: Vec<StageStatus>,
 }
 
@@ -34,7 +37,9 @@ pub fn status<S: SnapshotSource>(
         })
         .collect();
     Ok(StatusReport {
+        run_id: facts.run_id.clone(),
         derived: derive(&facts),
+        gate: facts.gate,
         stages,
     })
 }

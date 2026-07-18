@@ -1,0 +1,16 @@
+---
+source: crates/wire/tests/wire_shapes.rs
+expression: "CheckWire::refused(&refusal)"
+---
+{
+  "v": 1,
+  "allowed": false,
+  "reason": {
+    "code": "steer-pending",
+    "detail": "a steer-request awaits the operator at 02-tests, 03-implement",
+    "stages": [
+      "02-tests",
+      "03-implement"
+    ]
+  }
+}
