@@ -102,19 +102,52 @@ instance), `--attempts N` (parallel-attempt stages only).
 
 ## Architecture
 
-```
-spec.md ──▶ 01-design ──▶ 02-tests ──▶ 03-implement ──▶ 04-verify ──▶ 05-commit ──▶ da/<run-id>
-             (opus)         (sonnet)      (opus)          (bash gate,    (sonnet +      branch,
-                                                            no LLM)       adversarial    target
-                                                                          reviewer)      project
-```
-
 Each arrow is a handoff through an `output/` folder — the next stage reads what the previous
-stage (or you, editing by hand) left behind. The skill dispatches agent stages through
-`workflows/da-stage.js`, which routes to `da-arm-pre.js` (design/tests/implement) or
-`da-post-gate.js` (commit — the atomized adversarial review, one verdict per Gherkin scenario
-plus a holistic pass). `verify` never goes through a workflow: the mechanical gate stays
-mechanical.
+stage (or you, editing by hand) left behind. `da-stage.js` is the single dispatch point: it
+refuses `verify` outright (that gate is run by the caller with bash, never wrapped in an agent),
+routes `design` / `design-review` / `tests` / `implement` / `implement-parallel-attempt` to
+`da-arm-pre.js`, and routes `commit` to `da-post-gate.js` — which will not invoke the commit
+agent at all if the adversarial review finds a violation.
+
+```mermaid
+flowchart TD
+    spec[spec.md] --> stage[da-stage.js<br/>single dispatch point]
+
+    stage -- "verify" --> refuse["refused — never a workflow;<br/>caller runs gate.sh directly"]
+
+    stage -- "design / design-review<br/>tests / implement<br/>implement-parallel-attempt" --> arm[da-arm-pre.js]
+    stage -- "commit" --> gate[da-post-gate.js]
+
+    subgraph ARM["design → tests → implement"]
+        direction TB
+        design["01 design (opus)"] --> tests["02 tests (sonnet)"]
+        tests --> impl{"03 implement"}
+        impl -- single attempt --> implOne["implement (opus)"]
+        impl -- "--attempts N" --> parA["attempt 0..N (opus, parallel)"]
+        parA --> judge["judge winner (opus)"]
+        judge --> apply["apply winning patch"]
+    end
+    arm --> ARM
+
+    ARM -.-> verify["04 verify — bash gate.sh<br/>cargo test + clippy -D warnings<br/>(no LLM, fail-closed)"]
+    verify -- GATE RED --> stop(["stop — commit never runs"])
+    verify -- GATE GREEN --> gate
+
+    subgraph POSTGATE["05 commit — da-post-gate.js"]
+        direction TB
+        atomize["atomize scenarios (haiku)<br/>list every Gherkin scenario"] --> verifyfan
+        subgraph verifyfan[" "]
+            direction LR
+            atoms["1 adversarial reviewer<br/>per scenario (opus, parallel)"]
+            holistic["holistic pass (opus)<br/>spec vs whole diff"]
+        end
+        verifyfan --> decide{"any violation,<br/>dropped scenario,<br/>or holistic = no?"}
+        decide -- yes --> blocked(["BLOCKED — no commit,<br/>review published to output/"])
+        decide -- no --> commit["commit (sonnet)<br/>one scoped commit"]
+    end
+    gate --> POSTGATE
+    commit --> branch(["da/&lt;run-id&gt; branch,<br/>target project's own git"])
+```
 
 ```
 da-run/
