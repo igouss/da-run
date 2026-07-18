@@ -114,6 +114,16 @@ routes `design` / `design-review` / `tests` / `implement` / `implement-parallel-
 `da-arm-pre.js`, and routes `commit` to `da-post-gate.js` — which will not invoke the commit
 agent at all if the adversarial review finds a violation.
 
+Dispatch order is decided by **`da-state`** (`bin/state`), the run-state authority: a typed
+Rust state machine that re-derives the run's state from the filesystem on every call (the files
+stay canonical — ADR-0029 extended to the whole run) and answers `check <stage>` with allowed,
+steer-pending (exit 3), or a typed ordering refusal (exit 4). No path reaches "commit allowed"
+without a green gate and no pending steer — that law is property-tested and backed by an
+unforgeable proof token in the domain crate. `da-stage.js` refuses to run without a passing
+check in its args. Optionally, `da-state notify` mirrors the derived state to a `DaRun`
+Restate virtual object beside DaSteer, so anything on the tailnet can read run status without
+touching the run dir.
+
 ```mermaid
 flowchart TD
     spec[spec.md] --> stage[da-stage.js<br/>single dispatch point]
@@ -167,7 +177,16 @@ da-run/
     references/            house standards: hexagonal/ECB, testing, Rust (L3)
     stages/01..05           stage contracts (Inputs/Process/Outputs/Audit) + gate scripts
     bin/run                 run-instance driver (setup / capture), babashka
+    bin/state               run-state authority wrapper (builds/execs da-state)
     bin/workspace-lint       fitness functions for the algorithm folder itself
+  crates/                 the da-state workspace (hexagonal: domain / ports / app / adapters)
+    domain/                 the pure state machine: facts -> derive/check, typed refusals
+    ports/                  SnapshotSource + RunMirror traits
+    app/                    status / check-dispatch / publish-mirror use cases
+    adapter-fs/             run-dir reader (bb-parity steer + gate parsing)
+    adapter-restate/        DaRun mirror publisher (curl, bin/steer transport parity)
+    wire/                   versioned JSON shapes (CLI output + mirror payload)
+  bins/da-state/          composition root: derive / status / check / notify / selftest
 ```
 
 ## Provenance capture (optional)

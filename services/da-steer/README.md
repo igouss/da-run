@@ -15,8 +15,24 @@ npm run dev              # listens on :9080
 
 # register with the homelab Restate (service running on fedora, on the tailnet):
 restate deployments register http://fedora.mist-walleye.ts.net:9080
-restate services list    # expect DaSteer
+restate services list    # expect DaSteer and DaRun
 ```
+
+## DaRun — the run-state mirror
+
+The endpoint also binds `DaRun`, a virtual object keyed by run-id: `recordState` stores the
+derived run state (wire payload from `da-state`), `getState` reads it. Non-authoritative and
+last-writer-wins — the run dir stays canonical; this is a read model for anything on the
+tailnet that wants run status without filesystem access.
+
+```sh
+DA_STEER_INGRESS=https://restate-ingress.homelab bin/state notify --run <RUNDIR>   # publish
+curl -sS --cacert $CA -X POST https://restate-ingress.homelab/DaRun/<run-id>/getState \
+     -H 'content-type: application/json' -d '{}'                                   # read
+```
+
+After deploying a build that first adds `DaRun`, re-register the deployment (new services are
+only discovered at registration): `restate deployments register http://fedora.mist-walleye.ts.net:9080 --force`.
 
 ## Use
 
