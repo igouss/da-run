@@ -1,22 +1,29 @@
-# da-steer — durable steer-request park (ADR-0029)
+# da-steer — durable steer park + run-state mirror (ADR-0029)
 
-A minimal Restate workflow service: one instance per steer-request, parked on an awakeable
-until the operator answers. `bin/steer park` starts it, bridges the file answer into the
-awakeable (and vice versa), and unblocks the arm. The steer FILE stays canonical; this
-service only holds the durable wait.
+One Restate endpoint, two services. **DaSteer**: a workflow per steer-request, parked on an
+awakeable until the operator answers — `bin/steer park` starts it, bridges the file answer
+into the awakeable (and vice versa), and unblocks the arm. **DaRun**: a virtual object per
+run mirroring the derived run state published by `bin/state notify`. The FILES stay
+canonical for both; this endpoint holds only the durable wait and a read model.
 
 ## Run + register (homelab)
 
 ```sh
 cd services/da-steer
 npm install
-npm run typecheck        # or: npm run build
-npm run dev              # listens on :9080
+npm run build            # the systemd unit runs dist/, not tsx
+npm run dev              # or: run directly; listens on :9080
 
-# register with the homelab Restate (service running on fedora, on the tailnet):
-restate deployments register http://fedora.mist-walleye.ts.net:9080
-restate services list    # expect DaSteer and DaRun
+# register with the homelab Restate via its admin API (no restate CLI on this host):
+CA=~/.local/share/caddy/pki/authorities/local/root.crt
+curl -sS --cacert $CA -X POST https://restate.homelab/deployments \
+     -H 'content-type: application/json' \
+     -d '{"uri":"http://fedora.mist-walleye.ts.net:9080/","force":true}'
+curl -sS --cacert $CA https://restate.homelab/services   # expect DaSteer and DaRun
 ```
+
+In production it runs as the `da-steer` systemd user unit — see `infra/systemd/README.md`
+(install, restart-vs-re-register rules).
 
 ## DaRun — the run-state mirror
 
@@ -31,8 +38,9 @@ curl -sS --cacert $CA -X POST https://restate-ingress.homelab/DaRun/<run-id>/get
      -H 'content-type: application/json' -d '{}'                                   # read
 ```
 
-After deploying a build that first adds `DaRun`, re-register the deployment (new services are
-only discovered at registration): `restate deployments register http://fedora.mist-walleye.ts.net:9080 --force`.
+The payload is the versioned wire shape (`crates/wire`) — read it tolerantly. A deployment
+that adds a service (as the DaRun build did) must be re-registered before Restate routes to
+it; see `infra/systemd/README.md` for the admin-API call.
 
 ## Use
 
@@ -57,8 +65,10 @@ curl -sS --cacert $CA -X POST https://restate-ingress.homelab/restate/awakeables
      -H 'content-type: application/json' -d '{"answer": "use 9080"}'
 ```
 
-Observe parked steers: `restate invocations list` (or the UI at https://restate.homelab) —
-a parked steer shows `run` suspended on its awakeable.
+Observe parked steers in the UI at https://restate.homelab, or via the admin query API
+(`POST https://restate.homelab/query`, `accept: application/json`):
+`SELECT id, target, status FROM sys_invocation WHERE status != 'completed'` — a parked
+steer shows `run` suspended on its awakeable.
 
 ## Waiting without blocking a session
 
@@ -73,4 +83,4 @@ From an interactive Claude Code session, don't foreground `bin/steer park` — r
   replay. Side effects beyond that belong in `ctx.run`.
 - The awakeable id is the capability — tailnet-only, no further auth. Don't paste it anywhere
   public.
-- A green `/version` proves nothing; trust `restate invocations list`.
+- A green `/version` proves nothing; trust the invocation list (UI or the query above).
