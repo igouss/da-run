@@ -44,6 +44,17 @@ if (args.stage === 'verify') {
   )
 }
 
+// ADR-0028-adjacent honesty scaffolding: the caller must have run the run-state
+// authority and gotten "allowed". Advisory by design — the hard edges stay the
+// mechanical gate and the adversarial reviewer.
+if (!args.stateCheck || args.stateCheck.allowed !== true) {
+  throw new Error(
+    'da-stage refuses to dispatch without a passing run-state check — run: ' +
+      `bash "$SKILL_DIR/algorithm/bin/state" check --run ${args.runDir} ${args.stage} ` +
+      'and pass its printed JSON as args.stateCheck (SKILL.md §Ordering guards).'
+  )
+}
+
 const model = args.model || STAGE_MODELS[args.stage]
 if (!model) {
   throw new Error(
