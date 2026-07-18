@@ -1,0 +1,13 @@
+[package]
+name = "da-app"
+version.workspace = true
+edition.workspace = true
+description = "Ring 2: use cases over generic ports"
+
+[dependencies]
+da-domain = { workspace = true }
+da-ports = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true

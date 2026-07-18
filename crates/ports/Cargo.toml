@@ -1,0 +1,12 @@
+[package]
+name = "da-ports"
+version.workspace = true
+edition.workspace = true
+description = "Ring 1: sync port traits over domain types"
+
+[dependencies]
+da-domain = { workspace = true }
+thiserror = { workspace = true }
+
+[lints]
+workspace = true
