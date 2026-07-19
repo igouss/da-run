@@ -1,7 +1,8 @@
+use crate::derived::DerivedWire;
 use da_ports::{MirrorSnapshot, RunArtifact};
 use serde::{Deserialize, Serialize};
 
-/// One artifact file on the wire — the `recordArtifacts` payload element and
+/// One artifact file on the wire — a `recordSnapshot` payload element and
 /// the `getSnapshot` file entry.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArtifactWire {
@@ -9,15 +10,18 @@ pub struct ArtifactWire {
     pub content: String,
 }
 
-/// The `recordArtifacts` request body: the run's full artifact set
-/// (full-replace semantics — the run dir is canonical, the mirror follows).
+/// The `recordSnapshot` request body: derived state and the run's full
+/// artifact set in ONE call, so the mirror can never advertise a state its
+/// artifacts do not support (full-replace semantics — the run dir is
+/// canonical, the mirror follows).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ArtifactsWire {
+pub struct RunSnapshotWire {
+    pub state: DerivedWire,
     pub files: Vec<ArtifactWire>,
 }
 
-/// The `getSnapshot` response: the last recorded state (opaque here) and the
-/// artifact set.
+/// The `getSnapshot` response: the last recorded state (opaque here — a
+/// tolerant reader survives a newer producer) and the artifact set.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MirrorSnapshotWire {
     #[serde(default)]
@@ -26,9 +30,10 @@ pub struct MirrorSnapshotWire {
     pub files: Vec<ArtifactWire>,
 }
 
-impl ArtifactsWire {
-    pub fn from_ports(files: &[RunArtifact]) -> ArtifactsWire {
-        ArtifactsWire {
+impl RunSnapshotWire {
+    pub fn from_parts(state: DerivedWire, files: &[RunArtifact]) -> RunSnapshotWire {
+        RunSnapshotWire {
+            state,
             files: files
                 .iter()
                 .map(|file: &RunArtifact| ArtifactWire {

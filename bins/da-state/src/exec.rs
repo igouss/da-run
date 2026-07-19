@@ -15,8 +15,11 @@ use da_ports::{SnapshotError, SnapshotSource};
 use da_wire::{CheckWire, DerivedWire, FlowWire, StatusWire};
 use std::path::{Path, PathBuf};
 
-/// Exit codes — bin/steer's convention, extended.
+/// Exit codes — bin/steer's convention, extended. 1 is the odd one out:
+/// a configured mirror that failed to publish or restore (notify/restore
+/// only) — an operational failure, not a state-machine verdict.
 pub const EXIT_OK: u8 = 0;
+pub const EXIT_MIRROR_FAILURE: u8 = 1;
 pub const EXIT_USAGE: u8 = 2;
 pub const EXIT_STEER_PENDING: u8 = 3;
 pub const EXIT_ORDERING: u8 = 4;
@@ -162,7 +165,7 @@ fn run_notify(flow: &Flow, run_dir: &Path) -> Outcome {
         Err(PublishError::Mirror(error)) => Outcome {
             json: serde_json::json!({ "published": false, "error": error.to_string() }).to_string(),
             pretty: None,
-            exit_code: 1,
+            exit_code: EXIT_MIRROR_FAILURE,
         },
     }
 }
@@ -206,7 +209,7 @@ fn run_restore(run_id: &str, into: &Path) -> Outcome {
         Err(error) => Outcome {
             json: serde_json::json!({ "restored": false, "error": error.to_string() }).to_string(),
             pretty: None,
-            exit_code: 1,
+            exit_code: EXIT_MIRROR_FAILURE,
         },
     }
 }

@@ -133,3 +133,21 @@ fn absolute_path_is_refused() {
         Err(SnapshotError::Malformed { .. })
     ));
 }
+
+// Scenario: a non-UTF-8 output is a loud typed error, never silent U+FFFD
+// corruption in the durability layer.
+#[test]
+fn non_utf8_output_refuses_collection_naming_the_file() {
+    let (dir, flow): (TempDir, Flow) = scaffold();
+    let latin1: PathBuf = dir
+        .path()
+        .join("stages/01-plan/output/latin1-log.md");
+    fs::write(&latin1, [b'c', b'a', b'f', 0xE9]).unwrap();
+    match FsArtifactSource.collect(&flow, dir.path()) {
+        Err(SnapshotError::Malformed { path, detail }) => {
+            assert_eq!(path, latin1);
+            assert!(detail.contains("UTF-8"), "{detail}");
+        }
+        other => panic!("expected Malformed for non-UTF-8 bytes, got {other:?}"),
+    }
+}

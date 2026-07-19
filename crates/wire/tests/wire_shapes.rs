@@ -67,3 +67,14 @@ fn derived_wire_reader_tolerates_added_fields() {
     let parsed: DerivedWire = serde_json::from_str(payload).unwrap();
     assert_eq!(parsed.state, "future-state");
 }
+
+#[test]
+fn run_snapshot_wire_shape_is_pinned() {
+    let run_id: RunId = RunId::new("250718-widget").unwrap();
+    let state: DerivedWire = DerivedWire::from_domain(&run_id, &sample_derived());
+    let files: Vec<da_ports::RunArtifact> = vec![da_ports::RunArtifact {
+        path: "stages/01-plan/output/plan.md".to_string(),
+        content: "# plan".to_string(),
+    }];
+    insta::assert_json_snapshot!(da_wire::RunSnapshotWire::from_parts(state, &files));
+}

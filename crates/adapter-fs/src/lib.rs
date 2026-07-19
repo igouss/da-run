@@ -3,6 +3,7 @@
 //! the pipeline definition from `flow.ron`.
 
 mod flow_ron;
+mod read;
 mod fs_snapshot;
 mod gate_report;
 mod run_artifacts;

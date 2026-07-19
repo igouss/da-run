@@ -8,7 +8,7 @@ mod derived;
 mod flow;
 mod status;
 
-pub use artifact::{ArtifactWire, ArtifactsWire, MirrorSnapshotWire};
+pub use artifact::{ArtifactWire, MirrorSnapshotWire, RunSnapshotWire};
 pub use check::{CheckWire, ReasonWire, WarningWire};
 pub use derived::{AnomalyWire, DerivedWire};
 pub use flow::{FlowDispatchWire, FlowStageWire, FlowWire};

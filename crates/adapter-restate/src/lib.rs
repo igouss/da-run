@@ -9,7 +9,7 @@
 
 use da_domain::{Derived, RunId};
 use da_ports::{MirrorError, MirrorSnapshot, RunArtifact, RunMirror};
-use da_wire::{ArtifactsWire, DerivedWire, MirrorSnapshotWire};
+use da_wire::{DerivedWire, MirrorSnapshotWire, RunSnapshotWire};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -31,15 +31,15 @@ pub fn handler_url(ingress: &str, run_id: &str, handler: &str) -> String {
 }
 
 impl RunMirror for RestateIngressMirror {
-    fn publish(&self, run_id: &RunId, derived: &Derived) -> Result<(), MirrorError> {
-        let wire: DerivedWire = DerivedWire::from_domain(run_id, derived);
-        self.call(run_id.as_str(), "recordState", &wire)?;
-        Ok(())
-    }
-
-    fn publish_artifacts(&self, run_id: &RunId, files: &[RunArtifact]) -> Result<(), MirrorError> {
-        let wire: ArtifactsWire = ArtifactsWire::from_ports(files);
-        self.call(run_id.as_str(), "recordArtifacts", &wire)?;
+    fn publish_snapshot(
+        &self,
+        run_id: &RunId,
+        derived: &Derived,
+        files: &[RunArtifact],
+    ) -> Result<(), MirrorError> {
+        let state: DerivedWire = DerivedWire::from_domain(run_id, derived);
+        let wire: RunSnapshotWire = RunSnapshotWire::from_parts(state, files);
+        self.call(run_id.as_str(), "recordSnapshot", &wire)?;
         Ok(())
     }
 
@@ -114,26 +114,18 @@ mod tests {
     use super::handler_url;
 
     #[test]
-    fn url_targets_the_record_state_handler() {
+    fn url_targets_the_record_snapshot_handler() {
         assert_eq!(
-            handler_url("https://i", "250718-x", "recordState"),
-            "https://i/DaRun/250718-x/recordState"
+            handler_url("https://i", "250718-x", "recordSnapshot"),
+            "https://i/DaRun/250718-x/recordSnapshot"
         );
     }
 
     #[test]
     fn a_trailing_ingress_slash_does_not_double() {
         assert_eq!(
-            handler_url("https://i/", "r", "recordState"),
-            "https://i/DaRun/r/recordState"
-        );
-    }
-
-    #[test]
-    fn url_targets_the_record_artifacts_handler() {
-        assert_eq!(
-            handler_url("https://i", "r", "recordArtifacts"),
-            "https://i/DaRun/r/recordArtifacts"
+            handler_url("https://i/", "r", "recordSnapshot"),
+            "https://i/DaRun/r/recordSnapshot"
         );
     }
 

@@ -92,14 +92,15 @@ struct RecordingMirror {
 }
 
 impl RunMirror for RecordingMirror {
-    fn publish(&self, run_id: &RunId, derived: &Derived) -> Result<(), MirrorError> {
+    fn publish_snapshot(
+        &self,
+        run_id: &RunId,
+        derived: &Derived,
+        files: &[RunArtifact],
+    ) -> Result<(), MirrorError> {
         self.published
             .borrow_mut()
             .push((run_id.clone(), derived.clone()));
-        Ok(())
-    }
-
-    fn publish_artifacts(&self, _run_id: &RunId, files: &[RunArtifact]) -> Result<(), MirrorError> {
         self.artifacts.borrow_mut().push(files.to_vec());
         Ok(())
     }

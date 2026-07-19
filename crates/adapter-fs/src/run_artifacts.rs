@@ -93,14 +93,9 @@ fn push_file(
     if !full.is_file() {
         return Ok(());
     }
-    let bytes: Vec<u8> =
-        std::fs::read(&full).map_err(|error: std::io::Error| SnapshotError::Io {
-            path: full.clone(),
-            detail: error.to_string(),
-        })?;
     files.push(RunArtifact {
         path: rel.to_string_lossy().replace('\\', "/"),
-        content: String::from_utf8_lossy(&bytes).into_owned(),
+        content: crate::read::read_utf8(&full)?,
     });
     Ok(())
 }

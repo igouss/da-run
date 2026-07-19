@@ -36,8 +36,7 @@ pub fn publish_mirror<S: SnapshotSource, A: ArtifactSource, M: RunMirror>(
     let facts: FsFacts = source.snapshot(flow, run_dir)?;
     let derived: Derived = derive(flow, &facts);
     let files: Vec<RunArtifact> = artifacts.collect(flow, run_dir)?;
-    mirror.publish(&facts.run_id, &derived)?;
-    mirror.publish_artifacts(&facts.run_id, &files)?;
+    mirror.publish_snapshot(&facts.run_id, &derived, &files)?;
     Ok(Published {
         run_id: facts.run_id,
         derived,

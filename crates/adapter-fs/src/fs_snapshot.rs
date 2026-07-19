@@ -131,10 +131,7 @@ fn refine_phase(edn_path: &Path, raw: Option<&str>) -> Result<Phase, SnapshotErr
 }
 
 fn read_file(path: &Path) -> Result<String, SnapshotError> {
-    std::fs::read_to_string(path).map_err(|error: std::io::Error| SnapshotError::Io {
-        path: path.to_path_buf(),
-        detail: error.to_string(),
-    })
+    crate::read::read_utf8(path)
 }
 
 fn stage_index(flow: &Flow, target: StageRef) -> usize {

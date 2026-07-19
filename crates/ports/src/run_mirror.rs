@@ -11,8 +11,16 @@ pub struct MirrorError {
 /// The durable run mirror (non-authoritative for a live run — the filesystem
 /// stays canonical, ADR-0029). Holds the derived state and the artifact set,
 /// so a run can be restored from the mirror on another host.
+///
+/// State and artifacts travel in ONE publish: two calls would let a half
+/// failure leave the mirror advertising a state its artifacts do not
+/// support (da-run's recorded publish-atomicity gap, closed here by shape).
 pub trait RunMirror {
-    fn publish(&self, run_id: &RunId, derived: &Derived) -> Result<(), MirrorError>;
-    fn publish_artifacts(&self, run_id: &RunId, files: &[RunArtifact]) -> Result<(), MirrorError>;
+    fn publish_snapshot(
+        &self,
+        run_id: &RunId,
+        derived: &Derived,
+        files: &[RunArtifact],
+    ) -> Result<(), MirrorError>;
     fn fetch_snapshot(&self, run_id: &RunId) -> Result<MirrorSnapshot, MirrorError>;
 }

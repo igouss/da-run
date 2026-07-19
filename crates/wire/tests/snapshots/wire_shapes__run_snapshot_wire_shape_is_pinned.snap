@@ -1,0 +1,29 @@
+---
+source: crates/wire/tests/wire_shapes.rs
+assertion_line: 79
+expression: "da_wire::RunSnapshotWire::from_parts(state, &files)"
+---
+{
+  "state": {
+    "v": 1,
+    "run_id": "250718-widget",
+    "state": "gated-red",
+    "phase": "convergence",
+    "parked": [
+      "02-tests"
+    ],
+    "anomalies": [
+      {
+        "code": "later-output-without-earlier",
+        "later": "03-implement",
+        "earlier": "02-tests"
+      }
+    ]
+  },
+  "files": [
+    {
+      "path": "stages/01-plan/output/plan.md",
+      "content": "# plan"
+    }
+  ]
+}
