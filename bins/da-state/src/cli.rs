@@ -25,10 +25,16 @@ pub enum Command {
     },
     /// Decide a dispatch: exit 0 allowed, 3 steer pending, 4 ordering violation.
     /// Dispatch kinds come from the run's flow.ron — unknown kinds are exit 2.
+    /// An allowed check journals `dispatch:<kind>` to events.jsonl (ADR-0004)
+    /// — check is the one mandatory pre-dispatch touchpoint, so the journal
+    /// rides it structurally instead of relying on a remembered `bin/run mark`.
     Check {
         #[arg(long = "run")]
         run_dir: PathBuf,
         dispatch: String,
+        /// Skip the events.jsonl entry (status probes, dry runs).
+        #[arg(long = "no-journal")]
+        no_journal: bool,
     },
     /// Publish the derived state AND the run's artifacts to the DaRun mirror
     /// (needs DA_STEER_INGRESS) — after this the run is restorable elsewhere.

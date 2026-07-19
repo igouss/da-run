@@ -34,11 +34,13 @@ pub fn execute(args: &Cli) -> Outcome {
     match &args.command {
         Command::Derive { run_dir } => with_flow(run_dir, run_derive),
         Command::Status { run_dir } => with_flow(run_dir, run_status),
-        Command::Check { run_dir, dispatch } => {
-            with_flow(run_dir, |flow: &Flow, run_dir: &Path| {
-                run_check(flow, run_dir, dispatch)
-            })
-        }
+        Command::Check {
+            run_dir,
+            dispatch,
+            no_journal,
+        } => with_flow(run_dir, |flow: &Flow, run_dir: &Path| {
+            run_check(flow, run_dir, dispatch, *no_journal)
+        }),
         Command::Notify { run_dir } => with_flow(run_dir, run_notify),
         Command::Restore { run_id, into } => run_restore(run_id, into),
         Command::Flow { run_dir, file } => run_flow(run_dir.as_deref(), file.as_deref()),
@@ -85,13 +87,26 @@ fn run_status(flow: &Flow, run_dir: &Path) -> Outcome {
     }
 }
 
-fn run_check(flow: &Flow, run_dir: &Path, dispatch: &str) -> Outcome {
+fn run_check(flow: &Flow, run_dir: &Path, dispatch: &str, no_journal: bool) -> Outcome {
     match check_dispatch(&FsSnapshotSource, flow, run_dir, dispatch) {
-        Ok(Decision::Allowed(allowed)) => Outcome {
-            json: to_json(&CheckWire::allowed(&allowed)),
-            pretty: None,
-            exit_code: EXIT_OK,
-        },
+        Ok(Decision::Allowed(allowed)) => {
+            // The journal entry rides the allowed check — the one mandatory
+            // pre-dispatch touchpoint — so out-of-band classification never
+            // depends on the skill remembering a separate `mark` (ADR-0004).
+            // Best-effort like every journal write: a failed append is a
+            // stderr note, never a failed check.
+            if !no_journal {
+                let trigger: String = format!("dispatch:{dispatch}");
+                if let Err(detail) = da_adapter_fs::append_event(run_dir, &trigger) {
+                    eprintln!("note: event not journaled ({detail})");
+                }
+            }
+            Outcome {
+                json: to_json(&CheckWire::allowed(&allowed)),
+                pretty: None,
+                exit_code: EXIT_OK,
+            }
+        }
         // The CLI contract for a typo'd kind predates the typed refusal:
         // an error payload listing the flow's kinds, exit 2.
         Ok(Decision::Refused(Refusal::UnknownDispatch { .. })) => {

@@ -82,14 +82,10 @@ holistic verdict raises a steer-request and parks — enter the steer flow below
 workflow's returned JSON to the user — audits passed, files written, and for `commit` whether the
 adversarial gate passed and the commit sha.
 
-**After every agent-stage dispatch** (success, audit failure, or steer pause), journal it:
-
-```sh
-bb "$SKILL_DIR/engine/bin/run" mark --run <run-dir> --trigger dispatch:<stage>
-```
-
-This is the trial's instrumentation (events.jsonl): it is how operator edits between stages
-stay distinguishable from stage work. Never skip it to save a call.
+Journaling is structural (ADR-0004): the `state check` you already ran journals
+`dispatch:<stage>` to events.jsonl itself, so operator edits between stages stay
+distinguishable from stage work with no extra call. `bin/run mark` exists only for ad-hoc
+triggers (e.g. `--trigger steer:applied` after hand-editing an output as steering).
 
 **After a `commit` dispatch reports `committed: true`**, verify the record against git before
 trusting it — the agent's sha is a claim, not evidence:

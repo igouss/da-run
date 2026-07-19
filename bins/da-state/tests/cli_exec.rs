@@ -47,6 +47,61 @@ fn check_allowed_is_exit_0_with_allowed_true() {
     assert!(stdout.contains("\"allowed\":true"), "{stdout}");
 }
 
+// Scenario: an allowed check journals its dispatch (ADR-0004) — one entry
+// per check, trigger `dispatch:<kind>`, fingerprint included.
+#[test]
+fn check_allowed_journals_the_dispatch() {
+    let dir: tempfile::TempDir = tempfile::TempDir::new().unwrap();
+    scaffold(dir.path());
+    let run: &str = dir.path().to_str().unwrap();
+    let output: Output = da_state(dir.path(), &["check", "--run", run, "plan"], None);
+    assert_eq!(exit_code(&output), 0, "{output:?}");
+    let journal: String = fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 1, "{journal}");
+    assert!(journal.contains("\"trigger\":\"dispatch:plan\""), "{journal}");
+    assert!(journal.contains("\"fingerprint\":\""), "{journal}");
+}
+
+#[test]
+fn check_with_no_journal_writes_nothing() {
+    let dir: tempfile::TempDir = tempfile::TempDir::new().unwrap();
+    scaffold(dir.path());
+    let run: &str = dir.path().to_str().unwrap();
+    let output: Output = da_state(
+        dir.path(),
+        &["check", "--run", run, "plan", "--no-journal"],
+        None,
+    );
+    assert_eq!(exit_code(&output), 0, "{output:?}");
+    assert!(!dir.path().join("events.jsonl").exists());
+}
+
+// Scenario: a refused check journals nothing — no dispatch will follow, so
+// an entry would wrongly claim the next window as that dispatch's work.
+#[test]
+fn check_refused_journals_nothing() {
+    let dir: tempfile::TempDir = tempfile::TempDir::new().unwrap();
+    scaffold(dir.path());
+    let run: &str = dir.path().to_str().unwrap();
+    let output: Output = da_state(dir.path(), &["check", "--run", run, "build"], None);
+    assert_eq!(exit_code(&output), 4, "{output:?}");
+    assert!(!dir.path().join("events.jsonl").exists());
+}
+
+// Scenario: many checks append — the journal is a log, never a rewrite.
+#[test]
+fn two_checks_append_two_entries() {
+    let dir: tempfile::TempDir = tempfile::TempDir::new().unwrap();
+    scaffold(dir.path());
+    let run: &str = dir.path().to_str().unwrap();
+    let first: Output = da_state(dir.path(), &["check", "--run", run, "plan"], None);
+    let second: Output = da_state(dir.path(), &["check", "--run", run, "plan"], None);
+    assert_eq!(exit_code(&first), 0, "{first:?}");
+    assert_eq!(exit_code(&second), 0, "{second:?}");
+    let journal: String = fs::read_to_string(dir.path().join("events.jsonl")).unwrap();
+    assert_eq!(journal.lines().count(), 2, "{journal}");
+}
+
 #[test]
 fn check_ordering_violation_is_exit_4() {
     let dir: tempfile::TempDir = tempfile::TempDir::new().unwrap();

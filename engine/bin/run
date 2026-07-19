@@ -105,6 +105,51 @@
    ;; ADR-0010 meter, frozen with the record so the ratchet can be computed later.
    :steers {:count (count (or steers [])) :stages (vec (or steers []))}})
 
+(defn sha256
+  "Lowercase hex sha256 of a string's UTF-8 bytes — parity with sha256sum,
+   node's crypto, and adapter-fs's worktree_patch::digest."
+  [s]
+  (->> (.getBytes (str s) "UTF-8")
+       (.digest (java.security.MessageDigest/getInstance "SHA-256"))
+       (map #(format "%02x" %))
+       (apply str)))
+
+(defn fingerprint-of
+  "sha256 over `<rel> <content sha256>` lines of entries ({:rel :content}),
+   in the given (pre-sorted) order — the SHARED fingerprint algorithm:
+   da-state's events.rs pins the same fixture digest (parity law)."
+  [entries]
+  (sha256 (str/join "\n"
+                    (map (fn [{:keys [rel content]}] (str rel " " (sha256 content)))
+                         entries))))
+
+(defn transition-kind
+  "What explains a surface change between events a and b. The journal entry
+   for a dispatch is written by `da-state check` BEFORE the stage works, so
+   the work it initiates lands in the window AFTER it: a change is
+   stage-work when the INITIATING event (a) is a dispatch check or a steer
+   mark. The gate's own event lands after it writes its report, so a `gate:`
+   trigger at b explains its own change (engine-write). Everything else
+   moved the surface with nothing dispatched — out-of-band."
+  [a b]
+  (let [ta (str (:trigger a))
+        tb (str (:trigger b))]
+    (cond
+      (or (str/starts-with? ta "dispatch:")
+          (str/starts-with? ta "steer")) "stage-work"
+      (str/starts-with? tb "gate:") "engine-write"
+      :else "out-of-band")))
+
+(defn classify-transitions
+  "Consecutive event pairs whose fingerprint changed, labeled by what
+   explains the change (see transition-kind)."
+  [events]
+  (vec (for [[a b] (partition 2 1 events)
+             :when (not= (:fingerprint a) (:fingerprint b))]
+         {:from (:ts a) :to (:ts b)
+          :initiated-by (:trigger a) :trigger (:trigger b)
+          :kind (transition-kind a b)})))
+
 ;; ---- selftest ------------------------------------------------------------
 
 (defn selftest []
@@ -133,6 +178,38 @@
     (assert (= 1 (get-in m [:steers :count])))
     (assert (= ["02-tests"] (get-in m [:steers :stages]))))
   (assert (= 2 (get-in (manifest {:steers ["01-design" "02-tests"]}) [:steers :count]))) ; many
+  ;; fingerprint parity (ADR-0004): the SAME fixture digests are pinned in
+  ;; adapter-fs events.rs — a change to either side's algorithm breaks a pin.
+  (assert (= "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+             (fingerprint-of [])))                                   ; zero entries
+  (assert (= "ec51ef27d4bf77772dcb1f3c68107219e72d4d72eac7420899d54f0064abb0a7"
+             (fingerprint-of [{:rel "spec.md" :content "# spec\n"}
+                              {:rel "stages/01-plan/output/plan.md" :content "the plan\n"}])))
+  (assert (not= (fingerprint-of [{:rel "spec.md" :content "# spec\n"}])
+                (fingerprint-of [{:rel "spec.md" :content "# spec v2\n"}])))
+  ;; classify-transitions: the ADR-0004 classification law. The dispatch
+  ;; event is written by check BEFORE the stage works, so it explains the
+  ;; window AFTER it.
+  (let [e (fn [t fp] {:ts t :trigger t :fingerprint fp})]
+    (assert (empty? (classify-transitions [])))                       ; zero events
+    (assert (empty? (classify-transitions [(e "setup" "f0") (e "dispatch:design" "f0")]))) ; unchanged -> no transition
+    (assert (= "stage-work"                                           ; dispatch check -> its work
+               (:kind (first (classify-transitions [(e "dispatch:design" "f0") (e "seal:design" "f1")])))))
+    (assert (= "stage-work"                                           ; ...wherever the window closes
+               (:kind (first (classify-transitions [(e "dispatch:design" "f0") (e "dispatch:tests" "f1")])))))
+    (assert (= "stage-work"                                           ; steering via the documented channel
+               (:kind (first (classify-transitions [(e "steer:applied" "f0") (e "seal:x" "f1")])))))
+    (assert (= "engine-write"                                         ; the gate's own report write
+               (:kind (first (classify-transitions [(e "seal:verify" "f1") (e "gate:green" "f2")])))))
+    (assert (= "out-of-band"                                          ; changed BEFORE the next check
+               (:kind (first (classify-transitions [(e "seal:design" "f1") (e "dispatch:tests" "f2")])))))
+    (assert (= "out-of-band"                                          ; changed with nothing dispatched
+               (:kind (first (classify-transitions [(e "setup" "f0") (e "seal:x" "f1")])))))
+    (assert (= ["stage-work" "stage-work" "out-of-band"]              ; many: one journal, both kinds
+               (mapv :kind (classify-transitions
+                            [(e "dispatch:design" "f0") (e "seal:design" "f1")
+                             (e "dispatch:tests" "f1") (e "seal:tests" "f2")
+                             (e "seal:again" "f3")])))))
   (println (json/generate-string {:selftest "ok"})))
 
 ;; ---- shell helpers -------------------------------------------------------
@@ -221,39 +298,31 @@
 ;; Stage commits are intermediate history. Stage 05 squashes them into the one
 ;; clean commit that is the run's actual deliverable.
 
-(defn sha256
-  "Lowercase hex sha256 of a string's UTF-8 bytes — parity with sha256sum,
-   node's crypto, and adapter-fs's worktree_patch::digest."
-  [s]
-  (->> (.getBytes (str s) "UTF-8")
-       (.digest (java.security.MessageDigest/getInstance "SHA-256"))
-       (map #(format "%02x" %))
-       (apply str)))
-
-;; ---- run events (ADR-0010 / REQ-034..037 instrumentation) -----------------
+;; ---- run events (ADR-0004 / REQ-034..037 instrumentation) -----------------
 ;;
 ;; events.jsonl is the run's observability journal: a fingerprint of the
 ;; operator-editable surface (spec.md + every stage output, steer files
-;; excluded — they have their own channel) at every engine touchpoint, plus
-;; explicit `mark` events from the skill after each dispatch. The trial can
-;; then DETECT out-of-band edits — a fingerprint change whose explaining
-;; event is engine-side, not a dispatch — instead of self-grading. Editing
-;; outputs stays fully supported; it just becomes visible.
+;; excluded — they have their own channel) at every engine touchpoint. The
+;; dispatch touchpoint is journaled STRUCTURALLY by `da-state check` (the one
+;; mandatory pre-dispatch call — ADR-0004), never by a remembered `mark`;
+;; this script journals its own touchpoints (setup, seal, gate,
+;; record-commit). The trial can then DETECT out-of-band edits — a
+;; fingerprint change no dispatch explains — instead of self-grading.
+;; Editing outputs stays fully supported; it just becomes visible.
 
 (defn now-iso [] (str (java.time.Instant/now)))
 
 (defn outputs-fingerprint
-  "sha256 over sorted relative paths + content digests of spec.md and every
-   stages/*/output file except STEER-REQUEST.md."
+  "The journal fingerprint of a run dir: spec.md and every stages/*/output
+   file except STEER-REQUEST.md, sorted by path."
   [run]
   (let [files (sort (concat
                      (when (fs/exists? (str run "/spec.md")) [(str run "/spec.md")])
                      (map str (fs/glob (str run "/stages") "*/output/**"))))]
-    (sha256 (str/join "\n"
-                      (for [f files
-                            :when (and (fs/regular-file? f)
-                                       (not= "STEER-REQUEST.md" (str (fs/file-name f))))]
-                        (str (fs/relativize run f) " " (sha256 (slurp f))))))))
+    (fingerprint-of (for [f files
+                          :when (and (fs/regular-file? f)
+                                     (not= "STEER-REQUEST.md" (str (fs/file-name f))))]
+                      {:rel (str (fs/relativize run f)) :content (slurp f)}))))
 
 (defn log-event!
   "Append {ts trigger fingerprint} to events.jsonl. Recording is total and
@@ -276,20 +345,6 @@
            (remove str/blank?)
            (mapv #(json/parse-string % true)))
       [])))
-
-(defn classify-transitions
-  "Consecutive event pairs whose fingerprint changed, labeled by what
-   explains the change: a dispatch/steer mark = stage-work or steering; an
-   engine-side trigger = out-of-band (nothing dispatched, yet the surface
-   moved)."
-  [events]
-  (vec (for [[a b] (partition 2 1 events)
-             :when (not= (:fingerprint a) (:fingerprint b))]
-         {:from (:ts a) :to (:ts b) :trigger (:trigger b)
-          :kind (if (or (str/starts-with? (str (:trigger b)) "dispatch:")
-                        (str/starts-with? (str (:trigger b)) "steer"))
-                  "stage-work"
-                  "out-of-band")})))
 
 (defn mark [{:keys [run trigger]}]
   (when-not (and run trigger) (throw (ex-info "mark needs --run RUNDIR --trigger LABEL" {})))
@@ -682,7 +737,7 @@
       "restore"  (restore flags)
       (do (binding [*out* *err*]
             (println "usage: bin/run setup --project P --spec S [--arm folder] [--round R]")
-            (println "       bin/run mark --run RUNDIR --trigger dispatch:<kind>")
+            (println "       bin/run mark --run RUNDIR --trigger LABEL   (ad-hoc journal entry; dispatches are journaled by `state check` itself)")
             (println "       bin/run record-commit --run RUNDIR")
             (println "       bin/run capture --run RUNDIR [--round R]")
             (println "       bin/run restore --run-id RUNID [--into DIR]")
