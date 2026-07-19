@@ -23,6 +23,12 @@ export const meta = {
 //   steerPath        absolute path for the holistic reviewer's steer-request — a `partial`
 //                    verdict parks the run on the operator instead of silently committing
 //                    (da-run's partial-holistic-verdict question, resolved as option C)
+//   steerState       the parsed JSON of `bb engine/bin/steer check --run <runDir>`, run by
+//                    the CALLER right before this dispatch. Whether the partial-steer is
+//                    answered — and with what text — is decided from steerState.steers
+//                    (matched by file === steerPath), a mechanical fact from the file
+//                    authority, never from an agent's reading of the file. Absent or
+//                    unmatched -> treated as unanswered (fail-closed: park, don't commit).
 //   atomizerPath     optional: a flow-supplied file with atomization instructions — the
 //                    decomposition style (Gherkin, properties, proof obligations) is the
 //                    flow's to own, not this engine's
@@ -156,23 +162,32 @@ function partialSteerContent(holistic) {
   )
 }
 
-const STEER_CHECK_SCHEMA = {
+const STEER_WRITE_SCHEMA = {
   type: 'object',
   properties: {
-    answered: { type: 'boolean', description: 'true iff the steer file already holds non-blank text under ## Answer' },
-    answer: { type: 'string', description: 'the operator answer text when answered, else empty' },
-    written: { type: 'boolean', description: 'true iff you wrote the new steer-request file' },
+    written: { type: 'boolean', description: 'true iff you wrote the steer-request file' },
   },
-  required: ['answered', 'written'],
+  required: ['written'],
 }
 
-function steerCheckPrompt(content) {
+// The writer agent's ONLY job is materializing the file (this workflow
+// cannot touch the filesystem — same pattern as publish-review). Whether a
+// steer is ANSWERED is never its call: that fact arrives mechanically in
+// args.steerState from `bin/steer check`.
+function steerWritePrompt(content) {
   return (
-    `If the file ${args.steerPath} exists AND its \`## Answer\` section holds non-blank text, ` +
-    `report answered=true with that text as \`answer\` and make NO edits. Otherwise write ` +
-    `${args.steerPath} with EXACTLY this content (verbatim):\n\n---BEGIN---\n${content}---END---\n\n` +
-    `and report answered=false, written=true.`
+    `Write the file ${args.steerPath} with EXACTLY this content (verbatim, no edits):\n\n` +
+    `---BEGIN---\n${content}---END---\n\nand report written=true.`
   )
+}
+
+// The steer entry for this gate's steer file, from the caller's
+// `bin/steer check` JSON. null when the file did not exist at check time.
+// Matched by the stage-relative suffix, not the absolute string — the
+// caller may have spelled the run dir differently than args.steerPath.
+function partialSteerEntry() {
+  const steers = (args.steerState && args.steerState.steers) || []
+  return steers.find((s) => args.steerPath.endsWith(`stages/${s.stage}/output/STEER-REQUEST.md`)) || null
 }
 
 function commitPrompt(runDir, reviewSummary, honestVerdict) {
@@ -280,22 +295,31 @@ if (blocked) {
 }
 
 // A `partial` verdict is the machine needing a human judgment, not a
-// failure: raise (or read) the steer-request and only proceed once the
-// operator has answered it. Never decide for them.
+// failure: raise the steer-request and only proceed once `bin/steer check`
+// (run by the caller, threaded in as args.steerState) reports it answered.
+// The answered fact is mechanical; an agent only ever WRITES the file.
 let honestVerdict =
   `every atomized scenario passed and the holistic verdict is "${holistic.verdict}"`
 if (holistic.verdict === 'partial') {
-  const steer = await agent(steerCheckPrompt(partialSteerContent(holistic)), {
-    label: 'partial-steer',
-    model: 'haiku',
-    schema: STEER_CHECK_SCHEMA,
-  })
-  if (!steer || !steer.answered) {
+  const entry = partialSteerEntry()
+  if (!entry || !entry.answered) {
+    // No steer file yet -> write it (preserving an existing unanswered file
+    // and its Raised: stamp). Either way: park for the operator.
+    let written = false
+    if (!entry) {
+      const wrote = await agent(steerWritePrompt(partialSteerContent(holistic)), {
+        label: 'partial-steer',
+        model: 'haiku',
+        schema: STEER_WRITE_SCHEMA,
+      })
+      written = !!(wrote && wrote.written)
+    }
     log('holistic verdict is PARTIAL — steer-request raised, parking for the operator')
     return {
       gate: 'adversarial-verify',
       passed: false,
       steerPaused: 'holistic-partial',
+      steerWritten: written || !!entry,
       droppedScenarios: dropped,
       holisticVerdict: holistic.verdict,
       reviewPublished: !!(publish && publish.written),
@@ -304,7 +328,7 @@ if (holistic.verdict === 'partial') {
   }
   honestVerdict =
     `every atomized scenario passed; the holistic verdict was "partial" and the operator ` +
-    `answered the steer-request: "${steer.answer}" — that answer binds like the spec`
+    `answered the steer-request: "${entry.answer}" — that answer binds like the spec`
 }
 
 const commit = await agent(commitPrompt(args.runDir, reviewMd, honestVerdict), {

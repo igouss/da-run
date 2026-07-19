@@ -30,9 +30,12 @@ const input = typeof args === 'string' ? JSON.parse(args) : (args ?? {})
 if (!input.runDir) throw new Error('da-stage needs args.runDir (an absolute run-instance path)')
 if (!input.stage) throw new Error('da-stage needs args.stage')
 
-// The check and flow JSON may themselves arrive as pasted strings — same normalization.
+// The check, steer, and flow JSON may arrive as pasted strings — same normalization.
 if (typeof input.stateCheck === 'string') {
   try { input.stateCheck = JSON.parse(input.stateCheck) } catch { input.stateCheck = null }
+}
+if (typeof input.steerState === 'string') {
+  try { input.steerState = JSON.parse(input.steerState) } catch { input.steerState = null }
 }
 if (typeof input.flow === 'string') {
   try { input.flow = JSON.parse(input.flow) } catch { input.flow = null }
@@ -105,6 +108,18 @@ if (owner.role === 'commit') {
   // the atomized adversarial reviewer + the scoped commit, as one hard-gated unit — a caller
   // cannot reach the commit agent without the review passing (ADR-0027 #3 / ADR-0028 §2).
   // The reviewer reads the test plan of the dispatch's tests_from stage.
+  //
+  // steerState is required here: a `partial` holistic verdict is decided
+  // answered/parked from `bin/steer check`'s JSON — a mechanical fact from
+  // the file authority — never from an agent reading the steer file.
+  if (!input.steerState || !Array.isArray(input.steerState.steers)) {
+    throw new Error(
+      'the commit dispatch needs args.steerState — run: ' +
+        `bb "$SKILL_DIR/engine/bin/steer" check --run ${input.runDir} ` +
+        'and pass its printed JSON as args.steerState (exit 3 = a steer is still ' +
+        'pending; park on it instead of dispatching commit).'
+    )
+  }
   const gate = stages.find((s) => s.role === 'gate')
   const testsStage = named(dispatch.tests_from)
   const result = await workflow(

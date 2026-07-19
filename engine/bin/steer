@@ -141,6 +141,21 @@
             (string? j) j
             :else nil))))
 
+(defn check-report
+  "The check verdict from already-read steer files ({:stage :file :content
+   :answered}): per-steer detail with the answer text when answered — the
+   MECHANICAL source workflows consume (da-post-gate decides answered/parked
+   from this JSON, never from an agent's reading of the file) — plus the
+   pending/answered summaries harnesses key on."
+  [run steers]
+  {:run run
+   :steers (mapv (fn [{:keys [stage file content answered]}]
+                   (cond-> {:stage stage :file file :answered answered}
+                     answered (assoc :answer (section content "Answer"))))
+                 steers)
+   :pending (mapv #(select-keys % [:stage :file]) (remove :answered steers))
+   :answered (mapv :stage (filterv :answered steers))})
+
 (defn parse-flags
   [argv]
   (loop [xs argv, acc {}]
@@ -232,6 +247,21 @@
     (assert (= "park" (:cmd f)))
     (assert (= "02-tests" (:stage f))))
   (assert (= "yes" (:answer (parse-flags ["resolve" "--answer" "yes"]))))
+  ;; check-report: the mechanical answered source (zero / one / many)
+  (let [r (check-report "/r" [])]
+    (assert (= [] (:steers r)))
+    (assert (= [] (:pending r))))
+  (let [unanswered {:stage "04-verify" :file "/f" :content sample :answered false}
+        r (check-report "/r" [unanswered])]
+    (assert (= [{:stage "04-verify" :file "/f" :answered false}] (:steers r)))
+    (assert (nil? (:answer (first (:steers r)))))                   ; no answer text until answered
+    (assert (= [{:stage "04-verify" :file "/f"}] (:pending r))))
+  (let [answered {:stage "02-tests" :file "/a" :content (with-answer sample "use 9080") :answered true}
+        unanswered {:stage "04-verify" :file "/f" :content sample :answered false}
+        r (check-report "/r" [answered unanswered])]
+    (assert (= "use 9080" (:answer (first (:steers r)))))           ; the verbatim operator text
+    (assert (= ["02-tests"] (:answered r)))
+    (assert (= [{:stage "04-verify" :file "/f"}] (:pending r))))
   (println (json/generate-string {:selftest "ok"})))
 
 ;; ---- shell ---------------------------------------------------------------
@@ -306,12 +336,9 @@
     (doseq [sf all] (stamp-raised! sf))
     (doseq [sf all :when (and (:answered sf) (not (:answered-at (steer-meta (:content sf)))))]
       (stamp-answered! (:file sf)))
-    (let [pending (filterv (complement :answered) all)]
-      (println (json/generate-string
-                {:run run
-                 :pending (mapv #(select-keys % [:stage :file]) pending)
-                 :answered (mapv :stage (filterv :answered all))}))
-      (System/exit (if (seq pending) 3 0)))))
+    (let [report (check-report run all)]
+      (println (json/generate-string report))
+      (System/exit (if (seq (:pending report)) 3 0)))))
 
 (defn park-one!
   "Block until this steer is answered. With an ingress: durable park + two-way bridge.

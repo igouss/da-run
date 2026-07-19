@@ -71,8 +71,14 @@ args (absolute paths only):
 ```json
 { "runDir": "<absolute run dir>", "stage": "<stage>", "round": "ad-hoc",
   "workflowsDir": "<SKILL_DIR>/engine/workflows", "attempts": <N-if-given>,
-  "stateCheck": <the JSON printed by the ordering-guard check below> }
+  "stateCheck": <the JSON printed by the ordering-guard check below>,
+  "steerState": <commit only: the JSON printed by `bb "$SKILL_DIR/engine/bin/steer" check --run <run-dir>`> }
 ```
+
+`steerState` is required for the `commit` stage: a `partial` holistic verdict decides
+answered/parked from that JSON — a mechanical fact from the steer authority, never an agent's
+reading of the file. Run `steer check` right before the dispatch (exit 3 = a steer is still
+pending; enter the steer flow instead of dispatching).
 
 `workflowsDir` is required — `da-stage.js` refuses to run without it (the engines it routes
 to live beside it in the bundle). `da-stage.js` routes to the
