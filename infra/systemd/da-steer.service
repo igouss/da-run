@@ -1,0 +1,46 @@
+[Unit]
+Description=da-steer — durable steer park + DaRun state mirror for the da-run skill (ADR-0029)
+Documentation=https://github.com/igouss/da-run2
+# Version-tracked in the repo at infra/systemd/; installed into
+# ~/.config/systemd/user/ as a symlink (see infra/systemd/README.md).
+# Registered with the homelab Restate as http://fedora.mist-walleye.ts.net:9080 —
+# re-register when the port/host changes OR the endpoint gains a service (that is how
+# Restate discovers DaRun); a plain restart needs nothing — a dead endpoint backs off
+# and retries, and parked invocations replay on reconnect.
+After=network-online.target
+
+[Service]
+Type=simple
+# Adjust if the bundle lives elsewhere (~/.claude/skills/da-run, a project-local install).
+WorkingDirectory=%h/code/da-run2/services/da-steer
+# node via the fnm default alias — a stable path that survives node version bumps.
+# Runs the COMPILED service (npm run build), not tsx: fewer moving parts under systemd.
+ExecStart=%h/.local/share/fnm/aliases/default/bin/node dist/index.js
+Restart=on-failure
+RestartSec=5
+# The park is Restate's job, not this process's: the service holds no state worth
+# preserving across a crash — Restate re-delivers suspended invocations on reconnect
+# (observed 2026-07-18: kill mid-park -> backing-off -> replayed clean on restart).
+NoNewPrivileges=true
+Nice=5
+# Sandbox: a network listener with the full user account behind it needs less
+# of that account. Read-only OS and home except the service dir (node writes
+# nothing at runtime; npm/build run outside systemd), private /tmp and
+# devices, kernel surfaces off, IPv4/IPv6 + AF_UNIX (journald logging) only.
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=default.target
