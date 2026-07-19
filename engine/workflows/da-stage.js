@@ -11,7 +11,7 @@ export const meta = {
 //   runDir       absolute path to the run instance (holds CLAUDE.md, stages/, worktree/, run.edn, spec.md)
 //   stage        a dispatch kind from the run's flow.ron (e.g. 'design', 'tests', 'commit')
 //   flow         REQUIRED: the validated pipeline JSON printed by
-//                `bash "$SKILL_DIR/algorithm/bin/state" flow --run <runDir>` — stage names,
+//                `bash "$SKILL_DIR/engine/bin/state" flow --run <runDir>` — stage names,
 //                dirs, dispatch kinds, models, and strategies come from there, never from
 //                this script. A JSON string is normalized like the other args.
 //   round        optional, labeling only (commit stage)
@@ -41,7 +41,7 @@ if (typeof input.flow === 'string') {
 if (!input.flow || !Array.isArray(input.flow.stages)) {
   throw new Error(
     'da-stage needs args.flow — the pipeline definition. Run: ' +
-      `bash "$SKILL_DIR/algorithm/bin/state" flow --run ${input.runDir} ` +
+      `bash "$SKILL_DIR/engine/bin/state" flow --run ${input.runDir} ` +
       'and pass its printed JSON as args.flow (flow.ron is the single source of truth).'
   )
 }
@@ -58,7 +58,7 @@ if (!owner) {
 if (owner.role === 'gate') {
   throw new Error(
     `da-stage refuses "${input.stage}": the mechanical gate is never a workflow (ADR-0028 §3). ` +
-      `Run it yourself: bash "$SKILL_DIR/algorithm/bin/run" gate --run <runDir> (which seals the ` +
+      `Run it yourself: bash "$SKILL_DIR/engine/bin/run" gate --run <runDir> (which seals the ` +
       `worktree and stamps the report with its identity), then read ` +
       `GATE GREEN / GATE RED from stages/${owner.dir}/output/${owner.artifact}.`
   )
@@ -70,7 +70,7 @@ if (owner.role === 'gate') {
 if (!input.stateCheck || input.stateCheck.allowed !== true) {
   throw new Error(
     'da-stage refuses to dispatch without a passing run-state check — run: ' +
-      `bash "$SKILL_DIR/algorithm/bin/state" check --run ${input.runDir} ${input.stage} ` +
+      `bash "$SKILL_DIR/engine/bin/state" check --run ${input.runDir} ${input.stage} ` +
       'and pass its printed JSON as args.stateCheck (SKILL.md §Ordering guards).'
   )
 }

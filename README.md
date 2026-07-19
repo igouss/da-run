@@ -123,7 +123,7 @@ unforgeable proof token in the domain crate. `da-stage.js` refuses to run withou
 check in its args.
 
 The pipeline itself — stage names, dirs, dispatch kinds, ordering guards, per-stage model
-tiers — is not compiled in anywhere: **`algorithm/flow.ron`** is the single source of truth,
+tiers — is not compiled in anywhere: **`flows/<name>/flow.ron`** is the single source of truth,
 snapshotted into every run dir and validated at load time by the domain's `Flow::from_spec`
 (bad flow, no run). Every consumer reads it through `bin/state flow` as validated JSON:
 `bin/run` fail-fasts on it at setup, `workspace-lint` checks `stages/` on disk against it,
@@ -179,19 +179,24 @@ flowchart TD
 ```
 da-run/
   SKILL.md              the skill (Claude Code reads this)
-  workflows/
-    da-stage.js          single-stage dispatch (what the skill invokes)
-    da-arm-pre.js         design/tests/implement executor (incl. judged parallel attempts)
-    da-post-gate.js       atomized adversarial review + scoped commit
-  algorithm/
-    CLAUDE.md             the factory's identity + folder map (L0)
-    CONTEXT.md             task routing (L1)
-    flow.ron               THE pipeline definition: stages, dirs, dispatch kinds, guards
-    references/            house standards: hexagonal/ECB, testing, Rust (L3)
-    stages/01..05           stage contracts (Inputs/Process/Outputs/Audit) + gate scripts
-    bin/run                 run-instance driver (setup / capture / restore), babashka
+  engine/               the machine — reusable across every flow
+    bin/run                 run driver (setup / seal / gate / squash / capture / restore)
     bin/state               run-state authority wrapper (builds/execs da-state)
+    bin/steer               steer-request protocol
     bin/workspace-lint       fitness functions incl. stages/ <-> flow.ron consistency
+    workflows/
+      da-stage.js            single-stage dispatch (what the skill invokes)
+      da-arm-pre.js           design/tests/implement executor (incl. judged parallel attempts)
+      da-post-gate.js         atomized adversarial review + scoped commit
+    gate/dispatch.sh        the canonical verdict renderer, installed into every run
+    fixtures/               flows the engine's own tests use — never a shipped flow
+  flows/                the skills — one directory per pipeline
+    rust-factory/
+      CLAUDE.md             the factory's identity + folder map (L0)
+      CONTEXT.md             task routing (L1)
+      flow.ron               THE pipeline definition: stages, dirs, dispatch kinds, guards
+      references/            house standards: hexagonal/ECB, testing, Rust (L3)
+      stages/01..05           stage contracts (Inputs/Process/Outputs/Audit) + default-gate.sh
   crates/                 the da-state workspace (hexagonal: domain / ports / app / adapters)
     domain/                 the pure state machine + Flow validation (load-time, typed errors)
     ports/                  SnapshotSource / RunMirror / Artifact traits
@@ -208,7 +213,7 @@ The committed change lives in the target project's own git on the run branch. To
 immutable record (manifest, diff, gate report, traces) somewhere durable:
 
 ```sh
-DA_RECORDS=<records-dir> bb algorithm/bin/run capture --run <run-dir> --round ad-hoc
+DA_RECORDS=<records-dir> bb engine/bin/run capture --run <run-dir> --round ad-hoc
 ```
 
 Skip it for casual runs; use it when you care about provenance.

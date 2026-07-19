@@ -13,7 +13,7 @@ use tempfile::TempDir;
 const RUN_EDN: &str = "{:run-id \"250718-fixture\"\n :arm \"pre\"\n :phase \"steady-state\"\n :target {:project \"/p\"}}";
 
 /// The canonical flow — the adapter must read exactly what bin/run copies.
-const FLOW_RON: &str = include_str!("../../../algorithm/flow.ron");
+const FLOW_RON: &str = include_str!("../../../engine/fixtures/minimal-flow.ron");
 
 fn scaffold_run_dir() -> (TempDir, Flow) {
     let dir: TempDir = TempDir::new().unwrap();
@@ -47,7 +47,7 @@ fn snapshot(dir: &TempDir, flow: &Flow) -> Result<FsFacts, SnapshotError> {
 fn fresh_scaffold_has_no_output_anywhere() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
-    assert!(!facts.stages.get(stage_ref(&flow, "design")).has_output());
+    assert!(!facts.stages.get(stage_ref(&flow, "plan")).has_output());
     assert_eq!(facts.gate, None);
     assert!(!facts.commit_recorded);
     assert_eq!(facts.phase, Phase::SteadyState);
@@ -60,7 +60,7 @@ fn gitkeep_is_not_output() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
     assert_eq!(
-        facts.stages.get(stage_ref(&flow, "design")).output_files,
+        facts.stages.get(stage_ref(&flow, "plan")).output_files,
         Vec::<String>::new()
     );
 }
@@ -69,11 +69,11 @@ fn gitkeep_is_not_output() {
 #[test]
 fn one_design_file_is_design_output() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
-    write_output(&dir, &flow, "design", "design.md", "# design");
+    write_output(&dir, &flow, "plan", "plan.md", "# design");
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
     assert_eq!(
-        facts.stages.get(stage_ref(&flow, "design")).output_files,
-        vec!["design.md".to_string()]
+        facts.stages.get(stage_ref(&flow, "plan")).output_files,
+        vec!["plan.md".to_string()]
     );
 }
 
@@ -81,11 +81,11 @@ fn one_design_file_is_design_output() {
 #[test]
 fn many_output_files_are_sorted() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
-    write_output(&dir, &flow, "design", "b.md", "b");
-    write_output(&dir, &flow, "design", "a.md", "a");
+    write_output(&dir, &flow, "plan", "b.md", "b");
+    write_output(&dir, &flow, "plan", "a.md", "a");
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
     assert_eq!(
-        facts.stages.get(stage_ref(&flow, "design")).output_files,
+        facts.stages.get(stage_ref(&flow, "plan")).output_files,
         vec!["a.md".to_string(), "b.md".to_string()]
     );
 }
@@ -97,7 +97,7 @@ fn green_gate_report_reads_green() {
     write_output(
         &dir,
         &flow,
-        "verify",
+        "check",
         "gate-report.md",
         "=== gate ===\nall ok\n\nGATE GREEN\n",
     );
@@ -112,7 +112,7 @@ fn red_gate_report_reads_red() {
     write_output(
         &dir,
         &flow,
-        "verify",
+        "check",
         "gate-report.md",
         "tests failed\n\nGATE RED — do not ship\n",
     );
@@ -124,7 +124,7 @@ fn red_gate_report_reads_red() {
 #[test]
 fn garbage_gate_report_reads_none() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
-    write_output(&dir, &flow, "verify", "gate-report.md", "inconclusive");
+    write_output(&dir, &flow, "check", "gate-report.md", "inconclusive");
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
     assert_eq!(facts.gate, None);
 }
@@ -136,13 +136,13 @@ fn unanswered_steer_is_pending_and_not_output() {
     write_output(
         &dir,
         &flow,
-        "tests",
+        "build",
         "STEER-REQUEST.md",
-        "# STEER-REQUEST — 02-tests\n\n## Question\n\nWhich port?\n\n## Answer\n\n",
+        "# STEER-REQUEST — 02-build\n\n## Question\n\nWhich port?\n\n## Answer\n\n",
     );
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
-    assert!(facts.stages.get(stage_ref(&flow, "tests")).steer_pending());
-    assert!(!facts.stages.get(stage_ref(&flow, "tests")).has_output());
+    assert!(facts.stages.get(stage_ref(&flow, "build")).steer_pending());
+    assert!(!facts.stages.get(stage_ref(&flow, "build")).has_output());
 }
 
 // Scenario: an answered steer-request clears
@@ -152,19 +152,19 @@ fn answered_steer_is_not_pending() {
     write_output(
         &dir,
         &flow,
-        "tests",
+        "build",
         "STEER-REQUEST.md",
         "## Question\n\nWhich port?\n\n## Answer\n\nuse 9080\n",
     );
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
-    assert!(!facts.stages.get(stage_ref(&flow, "tests")).steer_pending());
+    assert!(!facts.stages.get(stage_ref(&flow, "build")).steer_pending());
 }
 
 // Scenario: a commit record marks the run committed
 #[test]
 fn commit_output_marks_commit_recorded() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
-    write_output(&dir, &flow, "commit", "commit.md", "scoped: message");
+    write_output(&dir, &flow, "land", "commit.md", "scoped: message");
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
     assert!(facts.commit_recorded);
 }
@@ -212,7 +212,7 @@ fn missing_output_dir_is_empty_stage() {
     let dir: TempDir = TempDir::new().unwrap();
     fs::write(dir.path().join("run.edn"), RUN_EDN).unwrap();
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
-    assert!(!facts.stages.get(stage_ref(&flow, "design")).has_output());
+    assert!(!facts.stages.get(stage_ref(&flow, "plan")).has_output());
 }
 
 // Scenario: flow loading fails loudly — zero file, garbage, invalid

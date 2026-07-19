@@ -11,7 +11,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The canonical flow, embedded so the selftest also proves it valid.
-const CANONICAL_FLOW: &str = include_str!("../../../algorithm/flow.ron");
+const CANONICAL_FLOW: &str = include_str!("../../../engine/fixtures/minimal-flow.ron");
 
 pub fn run() -> Outcome {
     match walk_ladder() {

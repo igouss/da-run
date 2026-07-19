@@ -7,8 +7,9 @@ argument-hint: <stage> <requirements-file> [--project P] [--run RUNDIR] [--attem
 # da-run — one stage of the directory algorithm, on demand
 
 Advance a directory-algorithm run instance by exactly one stage (or the full pipeline). This
-skill is **self-contained**: the workflows and the algorithm folder it drives are bundled beside
-this file. Two required arguments:
+skill is **self-contained**: the engine that drives a run and the flows it can drive are
+bundled beside this file. The stage names below are `rust-factory`'s, the default flow —
+another flow declares its own in `flow.ron`. Two required arguments:
 
 1. **stage** — one of `design`, `design-review`, `tests`, `implement`,
    `implement-parallel-attempt`, `verify`, `commit`, or `all`.
@@ -22,9 +23,12 @@ how this skill was loaded; otherwise find it with
 `ls ~/.claude/skills/da-run/SKILL.md .claude/skills/da-run/SKILL.md 2>/dev/null`). Everything
 below is addressed from it:
 
-- `$SKILL_DIR/workflows/` — `da-stage.js`, `da-arm-pre.js`, `da-post-gate.js`
-- `$SKILL_DIR/algorithm/` — the factory: `CLAUDE.md`, `CONTEXT.md`, `references/`, `stages/`,
-  `bin/run`, `bin/steer`, `bin/state`
+- `$SKILL_DIR/engine/` — the reusable machine, identical for every flow: `bin/run`,
+  `bin/state`, `bin/steer`, `bin/workspace-lint`, `workflows/` (`da-stage.js`,
+  `da-arm-pre.js`, `da-post-gate.js`), and `gate/dispatch.sh`
+- `$SKILL_DIR/flows/<name>/` — one pipeline's content: `flow.ron`, `CLAUDE.md`, `CONTEXT.md`,
+  `references/`, `stages/`. `rust-factory` is the default; `--flow <name>` selects another.
+  A new pipeline is a new directory here — no engine change.
 - `$SKILL_DIR/services/da-steer/` + `$SKILL_DIR/infra/systemd/` — optional Restate endpoint:
   the durable steer park (DaSteer) and the run-state mirror (DaRun, fed by `bin/state
   notify`). Not needed for file-only steering; see its README.
@@ -45,8 +49,12 @@ A stage always executes inside a run instance (the folder holding `CLAUDE.md`, `
    be a git repo with a clean working tree — the driver refuses a dirty one; relay its message).
 
    ```sh
-   bb "$SKILL_DIR/algorithm/bin/run" setup --project <P> --spec <requirements> --arm folder --round ad-hoc
+   bb "$SKILL_DIR/engine/bin/run" setup --project <P> --spec <requirements> --arm folder --round ad-hoc
    ```
+
+   Add `--flow <name>` to drive a pipeline other than the default `rust-factory` (a name under
+   `$SKILL_DIR/flows/`, or an absolute path to a flow dir). The run dir is flattened from the
+   flow, so its shape is the same whichever flow built it; `run.edn` records which one did.
 
    Parse `run-dir` from its JSON output — that is the run instance. Its worktree is
    `<run-dir>/worktree`. (Run root: `$DA_RUN_ROOT`, else `~/.cache/directory-algorithm/runs`.)
@@ -57,12 +65,12 @@ copy the requirements over `spec.md` and say so — the spec on disk is the one 
 ## Step 2 — dispatch the stage
 
 **Agent stages** (`design`, `design-review`, `tests`, `implement`, `implement-parallel-attempt`,
-`commit`): invoke the **Workflow** tool with `scriptPath` `$SKILL_DIR/workflows/da-stage.js` and
+`commit`): invoke the **Workflow** tool with `scriptPath` `$SKILL_DIR/engine/workflows/da-stage.js` and
 args (absolute paths only):
 
 ```json
 { "runDir": "<absolute run dir>", "stage": "<stage>", "round": "ad-hoc",
-  "workflowsDir": "<SKILL_DIR>/workflows", "attempts": <N-if-given>,
+  "workflowsDir": "<SKILL_DIR>/engine/workflows", "attempts": <N-if-given>,
   "stateCheck": <the JSON printed by the ordering-guard check below> }
 ```
 
@@ -77,7 +85,7 @@ adversarial gate passed and the commit sha.
 check). Run it yourself with Bash:
 
 ```sh
-bash "$SKILL_DIR/algorithm/bin/run" gate --run <run-dir>
+bash "$SKILL_DIR/engine/bin/run" gate --run <run-dir>
 ```
 
 The verbatim output goes to `<run-dir>/stages/04-verify/output/gate-report.md` (write it there if
@@ -92,11 +100,11 @@ red gate. Never continue past a red verify into commit.
 ## Steer-requests (a stage asking the operator)
 
 Any agent stage may pause by writing `stages/<NN>/output/STEER-REQUEST.md` (protocol:
-`$SKILL_DIR/algorithm/references/steering.md`) instead of completing. After every stage dispatch,
-run `bb "$SKILL_DIR/algorithm/bin/steer" check --run <run-dir>` — exit 3 means pending. Then:
+`$SKILL_DIR/flows/rust-factory/references/steering.md`) instead of completing. After every stage dispatch,
+run `bb "$SKILL_DIR/engine/bin/steer" check --run <run-dir>` — exit 3 means pending. Then:
 
 1. Relay the `## Question` and `## Options` to the user verbatim and ask for their decision.
-2. Write it under `## Answer` (or `bb "$SKILL_DIR/algorithm/bin/steer" resolve --run <run-dir>
+2. Write it under `## Answer` (or `bb "$SKILL_DIR/engine/bin/steer" resolve --run <run-dir>
    --stage <NN> --answer "..."`), then re-dispatch the same stage — the answered steer binds
    like the spec.
 3. If the run is parked durably (`DA_STEER_INGRESS` set, `bin/steer park` running), don't
@@ -112,7 +120,7 @@ The run-state machine `bin/state` is the authority on dispatch order — do not 
 rules from prose. Before **any** Step-2 dispatch, run:
 
 ```sh
-bash "$SKILL_DIR/algorithm/bin/state" check --run <run-dir> <stage>
+bash "$SKILL_DIR/engine/bin/state" check --run <run-dir> <stage>
 ```
 
 - exit 0 — allowed: dispatch, passing the printed JSON as `stateCheck` in the workflow args
@@ -123,7 +131,7 @@ bash "$SKILL_DIR/algorithm/bin/state" check --run <run-dir> <stage>
 
 The operator can steer between stages by editing any `output/` file — that is the point of
 running one stage at a time; a re-dispatch of a complete stage is a warning, never a refusal.
-`bash "$SKILL_DIR/algorithm/bin/state" status --run <run-dir> --pretty` renders the whole
+`bash "$SKILL_DIR/engine/bin/state" status --run <run-dir> --pretty` renders the whole
 pipeline (state, gate verdict, parked steers) whenever you need the picture.
 
 ## After the run (optional)
@@ -133,7 +141,7 @@ merge it as the user prefers. To freeze an immutable run record (manifest, diff,
 traces), set `DA_RECORDS` to a directory the user owns and run:
 
 ```sh
-DA_RECORDS=<records-dir> bb "$SKILL_DIR/algorithm/bin/run" capture --run <run-dir> --round ad-hoc
+DA_RECORDS=<records-dir> bb "$SKILL_DIR/engine/bin/run" capture --run <run-dir> --round ad-hoc
 ```
 
 Skip capture silently for casual runs; offer it when the user cares about provenance.

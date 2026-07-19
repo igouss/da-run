@@ -146,12 +146,29 @@
                       sort
                       vec)}))
 
-(defn repo-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
+(defn engine-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
+
+(defn flows-root [] (str (fs/parent (engine-root)) "/flows"))
+
+(defn resolve-flow
+  "A flow name under flows/, an explicit path, or every flow when given none."
+  [name]
+  (let [dir (if (str/starts-with? (str name) "/") name (str (flows-root) "/" name))]
+    (when-not (fs/exists? (str dir "/flow.ron"))
+      (binding [*out* *err*] (println "error: no flow.ron under" (str dir)))
+      (System/exit 2))
+    (str dir)))
+
+(defn all-flows []
+  (->> (fs/list-dir (flows-root)) (filter fs/directory?) (map str) sort vec))
 
 (let [args *command-line-args*]
   (if (some #{"--selftest"} args)
     (selftest)
-    (let [root (or (first (remove #(str/starts-with? % "-") args)) (repo-root))
+    (let [named (first (remove #(str/starts-with? % "-") args))
+          roots (if named [(resolve-flow named)] (all-flows))
+          violations (vec (mapcat #(lint (gather %)) roots))
+          root (str/join "," roots)
           violations (lint (gather root))]
       (println (json/generate-string {:root (str root)
                                       :violations violations

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use tempfile::TempDir;
 
 const RUN_EDN: &str = "{:run-id \"250718-artifacts\" :phase \"steady-state\"}";
-const FLOW_RON: &str = include_str!("../../../algorithm/flow.ron");
+const FLOW_RON: &str = include_str!("../../../engine/fixtures/minimal-flow.ron");
 
 fn scaffold() -> (TempDir, Flow) {
     let dir: TempDir = TempDir::new().unwrap();
@@ -46,12 +46,12 @@ fn fresh_run_collects_root_files_only() {
 fn one_output_file_is_collected() {
     let (dir, flow): (TempDir, Flow) = scaffold();
     fs::write(
-        dir.path().join("stages/01-design/output/design.md"),
+        dir.path().join("stages/01-plan/output/plan.md"),
         "# design",
     )
     .unwrap();
     let files: Vec<RunArtifact> = FsArtifactSource.collect(&flow, dir.path()).unwrap();
-    assert!(paths(&files).contains(&"stages/01-design/output/design.md"));
+    assert!(paths(&files).contains(&"stages/01-plan/output/plan.md"));
 }
 
 // Scenario: many outputs across stages, .gitkeep never included
@@ -59,14 +59,14 @@ fn one_output_file_is_collected() {
 fn many_outputs_are_collected_and_gitkeep_is_not() {
     let (dir, flow): (TempDir, Flow) = scaffold();
     fs::write(dir.path().join("spec.md"), "the spec").unwrap();
-    fs::write(dir.path().join("stages/01-design/output/design.md"), "d").unwrap();
+    fs::write(dir.path().join("stages/01-plan/output/plan.md"), "d").unwrap();
     fs::write(
-        dir.path().join("stages/02-tests/output/STEER-REQUEST.md"),
+        dir.path().join("stages/02-build/output/STEER-REQUEST.md"),
         "## Question\n\nq?\n\n## Answer\n\n",
     )
     .unwrap();
     fs::write(
-        dir.path().join("stages/04-verify/output/gate-report.md"),
+        dir.path().join("stages/03-check/output/gate-report.md"),
         "GATE GREEN",
     )
     .unwrap();
@@ -78,9 +78,9 @@ fn many_outputs_are_collected_and_gitkeep_is_not() {
             "run.edn",
             "flow.ron",
             "spec.md",
-            "stages/01-design/output/design.md",
-            "stages/02-tests/output/STEER-REQUEST.md",
-            "stages/04-verify/output/gate-report.md",
+            "stages/01-plan/output/plan.md",
+            "stages/02-build/output/STEER-REQUEST.md",
+            "stages/03-check/output/gate-report.md",
         ]
     );
     assert!(!collected.iter().any(|p: &&str| p.contains(".gitkeep")));
@@ -90,7 +90,7 @@ fn many_outputs_are_collected_and_gitkeep_is_not() {
 #[test]
 fn collect_then_materialize_round_trips() {
     let (dir, flow): (TempDir, Flow) = scaffold();
-    fs::write(dir.path().join("stages/01-design/output/design.md"), "# d").unwrap();
+    fs::write(dir.path().join("stages/01-plan/output/plan.md"), "# d").unwrap();
     let files: Vec<RunArtifact> = FsArtifactSource.collect(&flow, dir.path()).unwrap();
 
     let target: TempDir = TempDir::new().unwrap();
@@ -100,7 +100,7 @@ fn collect_then_materialize_round_trips() {
         RUN_EDN
     );
     assert_eq!(
-        fs::read_to_string(target.path().join("stages/01-design/output/design.md")).unwrap(),
+        fs::read_to_string(target.path().join("stages/01-plan/output/plan.md")).unwrap(),
         "# d"
     );
     let restored_flow: Flow = load_run_flow(target.path()).unwrap();

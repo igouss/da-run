@@ -41,7 +41,7 @@ the design, the test plan, the gate report, and the commit record.
 
 | Keyword | Action |
 |---------|--------|
-| `status` | Run `bash <skill>/algorithm/bin/state status --run . --pretty` (the run-state authority) and render its output. |
+| `status` | Run `bash <skill>/engine/bin/state status --run . --pretty` (the run-state authority) and render its output. |
 
 ### How `status` works
 

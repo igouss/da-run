@@ -1,8 +1,12 @@
 #!/usr/bin/env bb
 ;; run — the directory-algorithm run driver. Two phases, operator in the loop.
 ;;
-;;   bin/run setup   --project P --spec S [--arm folder] [--round R]
-;;       Generate a run instance under the run root, snapshot the algorithm files, add a
+;; The engine (bin/, workflows/, gate/) is flow-agnostic; a flow (flows/<name>/) supplies
+;; flow.ron, the contracts, references, and stage dirs. --flow selects one, default
+;; rust-factory. A new pipeline is a new flow dir — never an engine change.
+;;
+;;   bin/run setup   --project P --spec S [--flow NAME] [--arm folder] [--round R]
+;;       Generate a run instance under the run root, snapshot the flow's files, add a
 ;;       git worktree of P on a fresh branch, and print how to drive it. Refuses on a
 ;;       dirty target working tree — commit or stash first.
 ;;       Run root = $DA_RUN_ROOT, else ~/.cache/directory-algorithm/runs. NOT /tmp: a
@@ -120,28 +124,58 @@
   (let [{:keys [out err exit]} (apply p/sh args)]
     {:out (str/trim (or out "")) :err (str/trim (or err "")) :exit exit}))
 
-(defn repo-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
+(defn engine-root
+  "The engine: bin/, workflows/, gate/, fixtures/. Never flow content."
+  []
+  (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
+
+(defn repo-root [] (-> (engine-root) fs/parent str))
+
+(defn flows-root [] (str (repo-root) "/flows"))
+
+;; The flow used when --flow is not given.
+(def default-flow "rust-factory")
+
+(defn resolve-flow
+  "--flow is a name under flows/ or an absolute path to a flow dir. A flow is
+   the skill half: flow.ron, the contracts, references, and stages."
+  [flow]
+  (let [name (or flow default-flow)
+        dir  (if (str/starts-with? name "/") name (str (flows-root) "/" name))]
+    (when-not (fs/directory? dir)
+      (throw (ex-info (str "no flow at " dir " — available: "
+                           (str/join ", " (sort (map fs/file-name (fs/list-dir (flows-root))))))
+                      {})))
+    (when-not (fs/exists? (str dir "/flow.ron"))
+      (throw (ex-info (str dir " holds no flow.ron — not a flow dir") {})))
+    dir))
+
+(defn flow-files
+  "Everything a flow contributes to a run dir. Read from the flow, never a
+   hardcoded list, so a flow may add its own contracts without engine changes."
+  [flow-dir]
+  (->> (fs/list-dir flow-dir) (map fs/file-name) (map str) sort vec))
 
 (defn records-root [] (or (System/getenv "DA_RECORDS")
                           (str (fs/home) "/.local/share/da-run/records")))
 
 ;; flow.ron is the pipeline definition (stages, dispatch kinds, ordering
 ;; guards) — snapshotted with the run so every run dir is self-describing.
-(def algorithm-files ["CLAUDE.md" "CONTEXT.md" "flow.ron" "references" "stages"])
 
 (defn validate-flow!
   "Fail-fast load-time validation: bin/state parses and validates flow.ron
    (exit 0) or explains why not (exit 2). A bad flow never becomes a run."
-  [repo]
-  (let [r (sh (str repo "/bin/state") "flow" "--file" (str repo "/flow.ron"))]
+  [flow-dir]
+  (let [r (sh (str (engine-root) "/bin/state") "flow" "--file" (str flow-dir "/flow.ron"))]
     (when-not (zero? (:exit r))
       (throw (ex-info (str "flow.ron failed validation:\n"
-                           (:out r) (when (seq (:err r)) (str "\n" (:err r)))) {})))))
+                           (:out r) (when (seq (:err r)) (str "\n" (:err r)))) {})))
+    (json/parse-string (:out r) true)))
 
 (defn run-flow
   "The run's validated flow, as data. bin/state is the only parser."
   [run]
-  (let [r (sh (str (repo-root) "/bin/state") "flow" "--run" run)]
+  (let [r (sh (str (engine-root) "/bin/state") "flow" "--run" run)]
     (when-not (zero? (:exit r))
       (throw (ex-info (str "could not read the run's flow:\n" (:out r)
                            (when (seq (:err r)) (str "\n" (:err r)))) {})))
@@ -198,7 +232,7 @@
       ;; Publishing is part of making the stage durable, so it happens here
       ;; rather than waiting for an operator to remember it. Best-effort: no
       ;; mirror configured (or an unreachable one) must never fail a stage.
-      (let [n (sh (str (repo-root) "/bin/state") "notify" "--run" run)]
+      (let [n (sh (str (engine-root) "/bin/state") "notify" "--run" run)]
         (when-not (zero? (:exit n))
           (binding [*out* *err*]
             (println (str "note: mirror not updated (" (:cmd-detail n) (:err n) ")")))))
@@ -258,9 +292,11 @@
 
 ;; ---- setup ---------------------------------------------------------------
 
-(defn setup [{:keys [project spec arm round phase]}]
+(defn setup [{:keys [project spec arm round phase flow]}]
   (when-not (and project spec) (throw (ex-info "setup needs --project and --spec" {})))
   (let [repo    (repo-root)
+        flow-dir (resolve-flow flow)
+        flow-name (str (fs/file-name flow-dir))
         project (str (fs/absolutize project))
         status  (sh "git" "-C" project "status" "--porcelain")
         arm     (or arm "folder")
@@ -276,28 +312,39 @@
         wt      (str run-dir "/worktree")
         base    (:out (sh "git" "-C" project "rev-parse" "HEAD"))
         algver  (let [r (sh "git" "-C" repo "rev-parse" "--short" "HEAD")]
-                  (if (zero? (:exit r)) (:out r) "uncommitted-working-tree"))]
+                  (if (zero? (:exit r)) (:out r) "uncommitted-working-tree"))
+        pipeline (validate-flow! flow-dir)]
     (when-not (zero? (:exit status))
       (throw (ex-info (str "not a git repository (or git failed) at " project
                            (when (seq (:err status)) (str ": " (:err status)))) {})))
-    (validate-flow! repo)
+
     (when (working-tree-dirty? (:out status))
       (throw (ex-info (str "refusing to run — the target project has uncommitted changes.\n"
                            "Commit or stash them first: the worktree branches from HEAD, so "
                            "uncommitted or untracked files are silently excluded from the run's "
                            "baseline.\n\n" (:out status)) {})))
     (fs/create-dirs run-dir)
-    (doseq [f algorithm-files]
-      (let [src (str repo "/" f), dst (str run-dir "/" f)]
+    (doseq [f (flow-files flow-dir)]
+      (let [src (str flow-dir "/" f), dst (str run-dir "/" f)]
         (if (fs/directory? src)
           (fs/copy-tree src dst {:replace-existing true})
           (fs/copy src dst {:replace-existing true}))))
+    ;; The gate DISPATCHER is engine law — every flow gets the same one, so a
+    ;; flow cannot quietly weaken how the verdict is rendered. What a flow owns
+    ;; is its default-gate.sh (the actual bar), and the project may override
+    ;; both with its own .da/gate.
+    (let [gate-dir (:dir (gate-stage pipeline))
+          dst (str run-dir "/stages/" gate-dir "/gate.sh")]
+      (fs/create-dirs (fs/parent dst))
+      (fs/copy (str (engine-root) "/gate/dispatch.sh") dst {:replace-existing true})
+      (fs/set-posix-file-permissions dst "rwxr-xr-x"))
     (fs/copy (str (fs/absolutize spec)) (str run-dir "/spec.md") {:replace-existing true})
     (let [r (sh "git" "-C" project "worktree" "add" "-b" branch wt "HEAD")]
       (when-not (zero? (:exit r)) (throw (ex-info (str "git worktree add failed: " (:err r)) {}))))
     (spit (str run-dir "/run.edn")
           (pr-str {:run-id rid :project project :branch branch :base-commit base
-                   :algorithm-version algver :contracts algorithm-files
+                   :algorithm-version algver :flow flow-name
+                   :contracts (flow-files flow-dir)
                    :spec (str (fs/absolutize spec)) :arm arm :round round :phase phase
                    :created (str (java.time.Instant/ofEpochMilli millis))}))
     (println (json/generate-string
@@ -364,26 +411,40 @@
 
 ;; ---- restore -------------------------------------------------------------
 
-(defn restore [{:keys [run-id into]}]
+(defn copy-missing!
+  "Copy every file under src that the destination does not already hold. The
+   mirror is authoritative for anything it carried; the flow only fills gaps."
+  [src dst]
+  (doseq [f (fs/glob src "**")]
+    (let [rel (str (fs/relativize src f))
+          to  (str dst "/" rel)]
+      (when-not (or (fs/directory? f) (fs/exists? to))
+        (fs/create-dirs (fs/parent to))
+        (fs/copy f to)))))
+
+(defn restore [{:keys [run-id into flow]}]
   (when-not run-id (throw (ex-info "restore needs --run-id RUNID" {})))
-  (let [repo    (repo-root)
-        run-root (or (System/getenv "DA_RUN_ROOT")
+  (let [run-root (or (System/getenv "DA_RUN_ROOT")
                      (str (fs/home) "/.cache/directory-algorithm/runs"))
         run-dir (str (or into (str run-root "/" run-id)))]
     (when (fs/exists? (str run-dir "/run.edn"))
       (throw (ex-info (str run-dir " already holds a run — refusing to overwrite") {})))
-    ;; The factory's contracts first (CLAUDE.md, CONTEXT.md, references, stages, flow.ron),
-    ;; then the mirror overlay wins: run.edn, the run's own flow.ron, spec.md, outputs.
+    ;; The mirror comes first — it alone knows which flow built this run — and
+    ;; it stays authoritative. The flow then fills in only what the mirror does
+    ;; not carry: the contracts, references, and stage CONTEXT.md files.
     (fs/create-dirs run-dir)
-    (doseq [f algorithm-files]
-      (let [src (str repo "/" f), dst (str run-dir "/" f)]
-        (if (fs/directory? src)
-          (fs/copy-tree src dst {:replace-existing true})
-          (fs/copy src dst {:replace-existing true}))))
-    (let [r (sh (str repo "/bin/state") "restore" "--run-id" run-id "--into" run-dir)]
+    (let [r (sh (str (engine-root) "/bin/state") "restore" "--run-id" run-id "--into" run-dir)]
       (when-not (zero? (:exit r))
         (throw (ex-info (str "state restore failed:\n" (:out r)
                              (when (seq (:err r)) (str "\n" (:err r)))) {}))))
+    (let [named (:flow (edn/read-string (slurp (str run-dir "/run.edn"))))
+          flow-dir (resolve-flow (or flow named))]
+      (copy-missing! flow-dir run-dir)
+      (let [gate-dir (:dir (gate-stage (run-flow run-dir)))
+            dst (str run-dir "/stages/" gate-dir "/gate.sh")]
+        (fs/create-dirs (fs/parent dst))
+        (fs/copy (str (engine-root) "/gate/dispatch.sh") dst {:replace-existing true})
+        (fs/set-posix-file-permissions dst "rwxr-xr-x")))
     ;; The code comes back from worktree.patch, not from the origin host's
     ;; branch: that branch is never pushed, so it does not exist here. The
     ;; patch is base-relative, so any clone holding the base commit will do.
