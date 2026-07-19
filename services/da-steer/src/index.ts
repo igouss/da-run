@@ -10,6 +10,7 @@
 // in transit. Behavior lives in logic.ts behind a narrow seam; this file is
 // only the SDK binding.
 
+import * as http2 from "node:http2";
 import * as restate from "@restatedev/restate-sdk";
 import {
   type DerivedState,
@@ -59,4 +60,19 @@ const daSteer = restate.workflow({
   },
 });
 
-restate.endpoint().bind(daSteer).bind(daRun).listen(9080);
+// Bind address from the environment: DA_STEER_LISTEN as "host:port" (or a
+// bare port). Default unchanged — all interfaces, :9080. The systemd unit
+// pins the tailnet address so the listener is not reachable off-tailnet
+// even before Tailscale's own filtering. The SDK's own listen() cannot
+// bind a host, so the HTTP/2 server is instantiated here.
+const listen: string = process.env.DA_STEER_LISTEN ?? "9080";
+const separator: number = listen.lastIndexOf(":");
+const host: string | undefined = separator > 0 ? listen.slice(0, separator) : undefined;
+const port: number = Number.parseInt(separator > 0 ? listen.slice(separator + 1) : listen, 10);
+if (Number.isNaN(port)) {
+  throw new Error(`DA_STEER_LISTEN ${JSON.stringify(listen)} — expected "port" or "host:port"`);
+}
+const server: http2.Http2Server = http2.createServer(
+  restate.endpoint().bind(daSteer).bind(daRun).http2Handler()
+);
+server.listen(port, host);

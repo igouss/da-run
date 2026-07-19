@@ -16,6 +16,10 @@ WorkingDirectory=%h/code/da-run2/services/da-steer
 # node via the fnm default alias — a stable path that survives node version bumps.
 # Runs the COMPILED service (npm run build), not tsx: fewer moving parts under systemd.
 ExecStart=%h/.local/share/fnm/aliases/default/bin/node dist/index.js
+# Bind the listener to the tailnet address only (default is all interfaces).
+# Must match the URI registered with Restate; needs tailscaled up before
+# start (After=network-online.target covers boot ordering on this host).
+Environment=DA_STEER_LISTEN=fedora.mist-walleye.ts.net:9080
 Restart=on-failure
 RestartSec=5
 # The park is Restate's job, not this process's: the service holds no state worth
