@@ -224,6 +224,72 @@
        (map #(format "%02x" %))
        (apply str)))
 
+;; ---- run events (ADR-0010 / REQ-034..037 instrumentation) -----------------
+;;
+;; events.jsonl is the run's observability journal: a fingerprint of the
+;; operator-editable surface (spec.md + every stage output, steer files
+;; excluded — they have their own channel) at every engine touchpoint, plus
+;; explicit `mark` events from the skill after each dispatch. The trial can
+;; then DETECT out-of-band edits — a fingerprint change whose explaining
+;; event is engine-side, not a dispatch — instead of self-grading. Editing
+;; outputs stays fully supported; it just becomes visible.
+
+(defn now-iso [] (str (java.time.Instant/now)))
+
+(defn outputs-fingerprint
+  "sha256 over sorted relative paths + content digests of spec.md and every
+   stages/*/output file except STEER-REQUEST.md."
+  [run]
+  (let [files (sort (concat
+                     (when (fs/exists? (str run "/spec.md")) [(str run "/spec.md")])
+                     (map str (fs/glob (str run "/stages") "*/output/**"))))]
+    (sha256 (str/join "\n"
+                      (for [f files
+                            :when (and (fs/regular-file? f)
+                                       (not= "STEER-REQUEST.md" (str (fs/file-name f))))]
+                        (str (fs/relativize run f) " " (sha256 (slurp f))))))))
+
+(defn log-event!
+  "Append {ts trigger fingerprint} to events.jsonl. Recording is total and
+   best-effort; classification happens at capture time."
+  [run trigger]
+  (try
+    (spit (str run "/events.jsonl")
+          (str (json/generate-string {:ts (now-iso) :trigger trigger
+                                      :fingerprint (outputs-fingerprint run)})
+               "\n")
+          :append true)
+    (catch Exception e
+      (binding [*out* *err*]
+        (println (str "note: event not journaled (" (ex-message e) ")"))))))
+
+(defn read-events [run]
+  (let [f (str run "/events.jsonl")]
+    (if (fs/exists? f)
+      (->> (str/split-lines (slurp f))
+           (remove str/blank?)
+           (mapv #(json/parse-string % true)))
+      [])))
+
+(defn classify-transitions
+  "Consecutive event pairs whose fingerprint changed, labeled by what
+   explains the change: a dispatch/steer mark = stage-work or steering; an
+   engine-side trigger = out-of-band (nothing dispatched, yet the surface
+   moved)."
+  [events]
+  (vec (for [[a b] (partition 2 1 events)
+             :when (not= (:fingerprint a) (:fingerprint b))]
+         {:from (:ts a) :to (:ts b) :trigger (:trigger b)
+          :kind (if (or (str/starts-with? (str (:trigger b)) "dispatch:")
+                        (str/starts-with? (str (:trigger b)) "steer"))
+                  "stage-work"
+                  "out-of-band")})))
+
+(defn mark [{:keys [run trigger]}]
+  (when-not (and run trigger) (throw (ex-info "mark needs --run RUNDIR --trigger LABEL" {})))
+  (log-event! run trigger)
+  (println (json/generate-string {:run-dir run :marked trigger})))
+
 (defn seal!
   "Commit whatever the stage left in the worktree and refresh worktree.patch.
    Returns the worktree identity. Idempotent: a clean worktree commits nothing
@@ -255,6 +321,7 @@
           (binding [*out* *err*]
             (println (str "note: mirror not updated (exit " (:exit n) ": "
                           (if (seq (:err n)) (:err n) (:out n)) ")")))))
+      (log-event! run (str "seal:" label))
       (sha256 patch))))
 
 (defn seal [{:keys [run stage]}]
@@ -324,6 +391,7 @@
           (str "Commit: " head "\nBase: " base "\nBranch: " (:branch cfg) "\n"))
     ;; The new fact rides the mirror like every other root artifact.
     (sh (str (engine-root) "/bin/state") "notify" "--run" run)
+    (log-event! run "record-commit")
     (println (json/generate-string {:run-dir run :commit head :verified true}))))
 
 ;; ---- gate ----------------------------------------------------------------
@@ -359,6 +427,7 @@
     ;; The identity goes in last: the verdict is only ever readable together
     ;; with the code it judged.
     (spit report (str body "\n\nWorktree: " id "\n"))
+    (log-event! run (if (zero? (:exit r)) "gate:green" "gate:red"))
     (println (json/generate-string
               {:run-dir run :gate-report report :worktree-id id
                :verdict (if (zero? (:exit r)) "green" "red")}))
@@ -421,6 +490,7 @@
                    :contracts (flow-files flow-dir)
                    :spec (str (fs/absolutize spec)) :arm arm :round round :phase phase
                    :created (str (java.time.Instant/ofEpochMilli millis))}))
+    (log-event! run-dir "setup")
     (println (json/generate-string
               {:run-id rid :run-dir run-dir :worktree wt :branch branch
                :next ["cd the run dir and open Claude Code there"
@@ -429,6 +499,38 @@
                       (str "when done: bin/run capture --run " run-dir)]}))))
 
 ;; ---- capture -------------------------------------------------------------
+
+(defn steer-metrics
+  "Meter data from one frozen steer file: the Raised:/Answered:/Reason:
+   stamps bin/steer wrote, plus open time when both timestamps exist."
+  [stage file]
+  (let [c (slurp file)
+        line (fn [label] (second (re-find (re-pattern (str "(?m)^" label " (.+)$")) c)))
+        raised (line "Raised:")
+        answered (line "Answered:")
+        seconds (when (and raised answered)
+                  (try (.getSeconds (java.time.Duration/between
+                                     (java.time.Instant/parse raised)
+                                     (java.time.Instant/parse answered)))
+                       (catch Exception _ nil)))]
+    (cond-> {:stage stage :raised raised :answered answered :reason (line "Reason:")}
+      seconds (assoc :open-seconds seconds))))
+
+(defn run-metrics
+  "metrics.json content: the events journal classified (stage-work vs
+   out-of-band surface changes), gate colors, and per-steer meter data.
+   This is what makes the trial measurable instead of self-graded."
+  [run steers]
+  (let [events (read-events run)
+        transitions (classify-transitions events)
+        triggers (mapv :trigger events)]
+    {:events (count events)
+     :transitions transitions
+     :out-of-band-edits (vec (filter #(= "out-of-band" (:kind %)) transitions))
+     :gate {:greens (count (filter #(= "gate:green" %) triggers))
+            :reds (count (filter #(= "gate:red" %) triggers))}
+     :dispatches (vec (filter #(str/starts-with? (str %) "dispatch:") triggers))
+     :steers (mapv (fn [{:keys [stage file]}] (steer-metrics stage file)) steers)}))
 
 (defn capture [{:keys [run round]}]
   (when-not run (throw (ex-info "capture needs --run RUNDIR" {})))
@@ -473,6 +575,10 @@
            {:pretty true}))
     (spit (str out-dir "/result.patch") patch)
     (spit (str out-dir "/gate-report.md") greport)
+    (spit (str out-dir "/metrics.json")
+          (json/generate-string (run-metrics run steers) {:pretty true}))
+    (when (fs/exists? (str run "/events.jsonl"))
+      (fs/copy (str run "/events.jsonl") (str out-dir "/events.jsonl") {:replace-existing true}))
     (doseq [t (or traces [])]
       (fs/copy t (str out-dir "/traces/" (fs/file-name t)) {:replace-existing true}))
     (println (json/generate-string
@@ -562,6 +668,7 @@
       "seal"     (seal flags)
       "squash"   (squash flags)
       "gate"     (gate flags)
+      "mark"     (mark flags)
       "record-commit" (record-commit flags)
       "capture"  (capture flags)
       "restore"  (restore flags)

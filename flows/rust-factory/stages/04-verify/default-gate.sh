@@ -34,4 +34,24 @@ else
   echo "=== effect-audit ==="; echo "  SKIP: effect-audit not on PATH (cargo install from ~/code/tools/effect-audit)" >&2; echo
 fi
 
+# Mutation testing attacks the exact class the adversarial review can only
+# guess at: tests that pass while asserting nothing. Diff-scoped (--in-diff)
+# so it only mutates what this change touched — a full-tree run belongs in a
+# project's own .da/gate, not the per-change default. Loud SKIP when absent.
+# The change = worktree vs the run's base commit (from ../run.edn when run
+# inside a run instance; falls back to HEAD~ outside one).
+if command -v cargo-mutants >/dev/null 2>&1; then
+  base=$(sed -n 's/.*:base-commit "\([0-9a-f]*\)".*/\1/p' ../run.edn 2>/dev/null || true)
+  diff_file=$(mktemp)
+  git diff "${base:-HEAD~}" > "$diff_file" 2>/dev/null || : > "$diff_file"
+  if [ -s "$diff_file" ]; then
+    step "cargo-mutants (diff-scoped)" cargo mutants --no-times --in-diff "$diff_file"
+  else
+    echo "=== cargo-mutants ==="; echo "  SKIP: empty diff against ${base:-HEAD~} — nothing to mutate"; echo
+  fi
+  rm -f "$diff_file"
+else
+  echo "=== cargo-mutants ==="; echo "  SKIP: cargo-mutants not on PATH (cargo install cargo-mutants)" >&2; echo
+fi
+
 exit "$fail"

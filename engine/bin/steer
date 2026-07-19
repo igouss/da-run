@@ -49,6 +49,28 @@
 
 (defn steer-rel-path [stage] (str "stages/" stage "/output/STEER-REQUEST.md"))
 
+;; Meter metadata (ADR-0010 / REQ-034/036): `Raised:` and `Answered:`
+;; timestamps and an optional `Reason:` classification, stamped as top-level
+;; lines right after the title — outside every ## section, so neither the
+;; answered? rule nor the wf-key fingerprint moves when they land.
+
+(defn stamp-line
+  "Insert `<label> <value>` after the title line, unless a `<label>` line
+   already exists (first stamp wins — it is a record, not a mutable field)."
+  [content label value]
+  (if (re-find (re-pattern (str "(?m)^" label " ")) (or content ""))
+    content
+    (let [lines (str/split-lines (or content ""))]
+      (if (seq lines)
+        (str/join "\n" (concat [(first lines) (str label " " value)] (rest lines)))
+        (str label " " value)))))
+
+(defn steer-meta
+  "The stamped meter lines of one steer file: raised / answered / reason."
+  [content]
+  (letfn [(line [label] (second (re-find (re-pattern (str "(?m)^" label " (.+)$")) (or content ""))))]
+    {:raised (line "Raised:") :answered-at (line "Answered:") :reason (line "Reason:")}))
+
 (defn steer-fingerprint
   "8 hex chars of sha256 over the question, options, and Round line — the
    parts that make a steer THIS ask. The ## Answer section is excluded, so
@@ -155,6 +177,20 @@
   (let [c "## Answer\n\n\n## Later\n\nkeep"]
     (assert (str/includes? (with-answer c "a") "## Later"))
     (assert (str/includes? (with-answer c "a") "keep")))
+  ;; meter stamps: land after the title, first stamp wins, read back intact,
+  ;; and stamping must move NEITHER the answered? rule NOR the wf-key
+  (let [stamped (stamp-line sample "Raised:" "2026-07-18T00:00:00Z")]
+    (assert (str/starts-with? stamped "# STEER-REQUEST — 02-tests\nRaised: 2026-07-18T00:00:00Z"))
+    (assert (= "2026-07-18T00:00:00Z" (:raised (steer-meta stamped))))
+    (assert (= stamped (stamp-line stamped "Raised:" "2027-01-01T00:00:00Z")))  ; first wins
+    (assert (nil? (:answered-at (steer-meta stamped))))
+    (assert (not (answered? stamped)))
+    (assert (= (wf-key "r" "02-tests" sample) (wf-key "r" "02-tests" stamped))))
+  (let [full (-> sample
+                 (stamp-line "Answered:" "t2")
+                 (stamp-line "Reason:" "spec-gap"))]
+    (assert (= "t2" (:answered-at (steer-meta full))))
+    (assert (= "spec-gap" (:reason (steer-meta full)))))
   ;; with-answer must not interpret $ or \ in the operator's text (regex
   ;; replacement metacharacters) — the answer is content, verbatim
   (assert (str/includes? (with-answer sample "costs $1 and \\ escapes") "costs $1 and \\ escapes"))
@@ -246,21 +282,43 @@
     (when (and id (string? id) (seq id))
       (curl! (resolve-cmd (ca-path) (ingress) id answer)))))
 
+(defn now-iso [] (str (java.time.Instant/now)))
+
+(defn stamp-raised!
+  "First sight of an unanswered steer gets its Raised: timestamp — the
+   open-time meter (REQ-034) starts when the harness first observes the ask."
+  [{:keys [file content answered]}]
+  (when (and (not answered) (not (:raised (steer-meta content))))
+    (spit file (stamp-line content "Raised:" (now-iso)))))
+
+(defn stamp-answered!
+  "An answered steer gets its Answered: timestamp (and optional Reason:
+   classification) once, whichever side the answer arrived from."
+  [file & [reason]]
+  (let [c (slurp file)
+        c (stamp-line c "Answered:" (now-iso))
+        c (if (seq (str reason)) (stamp-line c "Reason:" (str reason)) c)]
+    (spit file c)))
+
 (defn cmd-check [{:keys [run stage]}]
   (when-not run (throw (ex-info "check needs --run RUNDIR" {})))
-  (let [all (vec (steer-files run stage))
-        pending (filterv (complement :answered) all)]
-    (println (json/generate-string
-              {:run run
-               :pending (mapv #(select-keys % [:stage :file]) pending)
-               :answered (mapv :stage (filterv :answered all))}))
-    (System/exit (if (seq pending) 3 0))))
+  (let [all (vec (steer-files run stage))]
+    (doseq [sf all] (stamp-raised! sf))
+    (doseq [sf all :when (and (:answered sf) (not (:answered-at (steer-meta (:content sf)))))]
+      (stamp-answered! (:file sf)))
+    (let [pending (filterv (complement :answered) all)]
+      (println (json/generate-string
+                {:run run
+                 :pending (mapv #(select-keys % [:stage :file]) pending)
+                 :answered (mapv :stage (filterv :answered all))}))
+      (System/exit (if (seq pending) 3 0)))))
 
 (defn park-one!
   "Block until this steer is answered. With an ingress: durable park + two-way bridge.
    Without: poll the file. Returns the answer."
   [run-dir {:keys [stage file] :as sf}]
   (let [key (when (ingress) (restate-start! run-dir sf))]
+    (stamp-raised! sf)
     (when key (println (str "  parked durably: DaSteer/" key " (answer in the file, via "
                             "`bin/steer resolve`, or in the Restate UI)")))
     (loop []
@@ -272,11 +330,14 @@
         (cond
           (answered? c)
           (let [ans (section c "Answer")]
+            (stamp-answered! file)
             (when key (restate-resolve! key ans))   ; file answered first -> complete the durable record
             ans)
           :else
           (if-let [ans (and key (restate-answer key))]
-            (do (spit file (with-answer c ans)) ans) ; Restate answered first -> write the file record
+            (do (spit file (with-answer c ans))      ; Restate answered first -> write the file record
+                (stamp-answered! file)
+                ans)
             (do (Thread/sleep 5000) (recur))))))))
 
 (defn cmd-park [{:keys [run stage]}]
@@ -289,14 +350,15 @@
         (let [ans (park-one! run sf)]
           (println (json/generate-string {:stage (:stage sf) :answered true :answer ans})))))))
 
-(defn cmd-resolve [{:keys [run stage answer]}]
+(defn cmd-resolve [{:keys [run stage answer reason]}]
   (when-not (and run stage answer) (throw (ex-info "resolve needs --run --stage --answer" {})))
   (let [f (str run "/" (steer-rel-path stage))]
     (when-not (fs/exists? f) (throw (ex-info (str "no steer-request at " f) {})))
     (let [before (slurp f)]  ; key from the pre-answer content — fingerprint ignores ## Answer
       (spit f (with-answer before answer))
+      (stamp-answered! f reason)
       (when (ingress) (restate-resolve! (wf-key (run-id-of run) stage before) answer)))
-    (println (json/generate-string {:resolved stage :file f}))))
+    (println (json/generate-string {:resolved stage :file f :reason reason}))))
 
 ;; ---- dispatch ------------------------------------------------------------
 
@@ -310,7 +372,7 @@
       (do (binding [*out* *err*]
             (println "usage: bin/steer check   --run RUNDIR [--stage NN-name]   (exit 3 = pending)")
             (println "       bin/steer park    --run RUNDIR [--stage NN-name]")
-            (println "       bin/steer resolve --run RUNDIR --stage NN-name --answer TEXT")
+            (println "       bin/steer resolve --run RUNDIR --stage NN-name --answer TEXT [--reason spec-gap|spec-wrong|scope-cut|preference|other]")
             (println "       bin/steer --selftest"))
           (System/exit 2))))
   (catch clojure.lang.ExceptionInfo e
