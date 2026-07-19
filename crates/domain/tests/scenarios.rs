@@ -5,7 +5,10 @@
 
 mod common;
 
-use common::{dispatch_ref, fresh_facts, implemented_facts, test_flow, with_output, with_steer};
+use common::{
+    dispatch_ref, fresh_facts, implemented_facts, test_flow, with_drifted_worktree,
+    with_empty_worktree, with_gated_worktree, with_output, with_steer,
+};
 use da_domain::{Anomaly, Flow, FsFacts, Refusal, RunState, Verdict, Warning, check, derive};
 
 // Scenario: a fresh run holds only the spec
@@ -93,11 +96,53 @@ fn green_gate_is_gated_green() {
 }
 
 #[test]
-fn green_gate_allows_commit() {
+fn green_gate_on_the_verified_worktree_allows_commit() {
     let flow: Flow = test_flow();
     let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Green);
+    let facts: FsFacts = with_gated_worktree(&facts, "wt-verified");
     assert!(check(&flow, &facts, dispatch_ref(&flow, "commit")).is_ok());
+}
+
+// Scenario: a green gate over a worktree that has since moved refuses commit.
+// This is the restore hazard — the gate report travels with the run, so its
+// verdict outlives the code it described.
+#[test]
+fn green_gate_on_a_moved_worktree_refuses_commit() {
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
+    facts.gate = Some(Verdict::Green);
+    let facts: FsFacts = with_drifted_worktree(&facts, "wt-verified", "wt-now");
+    assert!(matches!(
+        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        Err(Refusal::WorktreeMovedSinceGate { .. })
+    ));
+}
+
+// Scenario: a run restored without its code carries a green gate but an empty
+// worktree — the false green that would otherwise ship an empty commit.
+#[test]
+fn green_gate_over_an_empty_worktree_refuses_commit() {
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
+    facts.gate = Some(Verdict::Green);
+    let facts: FsFacts = with_empty_worktree(&facts, "wt-empty");
+    assert!(matches!(
+        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        Err(Refusal::WorktreeEmpty)
+    ));
+}
+
+// Scenario: no patch at all means the run dir cannot say what code it holds.
+#[test]
+fn green_gate_without_a_worktree_patch_refuses_commit() {
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
+    facts.gate = Some(Verdict::Green);
+    assert!(matches!(
+        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        Err(Refusal::WorktreeAbsent)
+    ));
 }
 
 // Scenario: a red gate refuses commit but allows rework

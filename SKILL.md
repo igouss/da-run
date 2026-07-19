@@ -77,7 +77,7 @@ adversarial gate passed and the commit sha.
 check). Run it yourself with Bash:
 
 ```sh
-cd <run-dir>/worktree && bash ../stages/04-verify/gate.sh
+bash "$SKILL_DIR/algorithm/bin/run" gate --run <run-dir>
 ```
 
 The verbatim output goes to `<run-dir>/stages/04-verify/output/gate-report.md` (write it there if

@@ -4,8 +4,14 @@ use std::path::Path;
 
 /// One run artifact: a run-dir-relative path and its UTF-8 content.
 /// Artifacts are the run's durable ephemera — run.edn, flow.ron, spec.md,
-/// and every stage's output/ files. The worktree is NOT an artifact: code
-/// lives in the target project's git (branch + base commit in run.edn).
+/// every stage's output/ files, and `worktree.patch`.
+///
+/// The patch is what makes the mirror sufficient on its own. Branch and base
+/// commit alone are not enough: the run branch is never pushed, so it does
+/// not exist on another host, and between the first stage and the commit
+/// stage the code is intermediate history that no shared ref names. The
+/// patch is base-relative text, so any clone holding the base commit can
+/// reconstitute the run's code exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunArtifact {
     pub path: String,

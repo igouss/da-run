@@ -1,8 +1,10 @@
-use crate::gate_report::gate_verdict;
+use crate::gate_report::{gate_verdict, gate_worktree};
 use crate::run_edn::{EdnFacts, extract_edn_facts, parse_phase};
 use crate::steer_file::steer_answered;
+use crate::worktree_patch::{WORKTREE_PATCH, worktree_facts};
 use da_domain::{
     Flow, FsFacts, Phase, RunId, StageDef, StageFacts, StageFactsMap, StageRef, SteerFacts, Verdict,
+    WorktreeFacts, WorktreeId,
 };
 use da_ports::{SnapshotError, SnapshotSource};
 use std::path::{Path, PathBuf};
@@ -38,13 +40,18 @@ impl SnapshotSource for FsSnapshotSource {
                 .unwrap_or_else(StageFacts::empty)
         });
 
-        let gate: Option<Verdict> = read_gate(flow, run_dir)?;
+        let report: Option<String> = read_gate_report(flow, run_dir)?;
+        let gate: Option<Verdict> = report.as_deref().and_then(gate_verdict);
+        let gate_worktree: Option<WorktreeId> = report.as_deref().and_then(gate_worktree);
+        let worktree: Option<WorktreeFacts> = read_worktree(run_dir)?;
         let (commit_ref, _): (StageRef, &StageDef) = flow.commit();
         let commit_recorded: bool = stages.get(commit_ref).has_output();
         Ok(FsFacts {
             stages,
             gate,
             commit_recorded,
+            worktree,
+            gate_worktree,
             phase,
             run_id,
         })
@@ -86,13 +93,20 @@ fn read_stage(run_dir: &Path, stage_dir: &str) -> Result<StageFacts, SnapshotErr
     })
 }
 
-fn read_gate(flow: &Flow, run_dir: &Path) -> Result<Option<Verdict>, SnapshotError> {
+fn read_gate_report(flow: &Flow, run_dir: &Path) -> Result<Option<String>, SnapshotError> {
     let report_path: PathBuf = run_dir.join(flow.gate_report_path());
     if !report_path.is_file() {
         return Ok(None);
     }
-    let report: String = read_file(&report_path)?;
-    Ok(gate_verdict(&report))
+    read_file(&report_path).map(Some)
+}
+
+fn read_worktree(run_dir: &Path) -> Result<Option<WorktreeFacts>, SnapshotError> {
+    let patch_path: PathBuf = run_dir.join(WORKTREE_PATCH);
+    if !patch_path.is_file() {
+        return Ok(None);
+    }
+    Ok(worktree_facts(&read_file(&patch_path)?))
 }
 
 fn refine_run_id(edn_path: &Path, raw: Option<&str>) -> Result<RunId, SnapshotError> {

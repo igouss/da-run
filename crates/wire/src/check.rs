@@ -97,6 +97,24 @@ fn reason_wire(refusal: &Refusal) -> ReasonWire {
             gate: None,
             stages: stages.clone(),
         },
+        Refusal::WorktreeAbsent => ReasonWire {
+            code: "worktree-absent".to_string(),
+            detail,
+            gate: None,
+            stages: Vec::new(),
+        },
+        Refusal::WorktreeEmpty => ReasonWire {
+            code: "worktree-empty".to_string(),
+            detail,
+            gate: None,
+            stages: Vec::new(),
+        },
+        Refusal::WorktreeMovedSinceGate { .. } => ReasonWire {
+            code: "worktree-moved-since-gate".to_string(),
+            detail,
+            gate: None,
+            stages: Vec::new(),
+        },
         _ => ReasonWire {
             code: "unknown".to_string(),
             detail,

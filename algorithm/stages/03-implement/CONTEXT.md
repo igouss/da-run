@@ -22,7 +22,10 @@ Modify the project so the tests from stage 02 pass, within the quality floor.
    host gate cannot prove them. Implement any row that is missing — a gate going green on a
    subset of the ledger is **not** done. This is the round-1 failure (built one layer, stopped at
    first green) turned into a hard stop.
-5. Leave the change in the worktree, uncommitted — stage 05 writes the commit once the gate is green.
+5. Seal the stage: `bash "$SKILL_DIR/algorithm/bin/run" seal --run <runDir> --stage implement`. This
+   commits the worktree and refreshes worktree.patch, so the work survives a host move — untracked
+   files are invisible to `git diff` and would otherwise be lost. Stage 05 squashes these stage
+   commits into the one clean commit once the gate is green.
 6. Run the Audit. Revise until it passes, then write the output.
 
 ## Outputs

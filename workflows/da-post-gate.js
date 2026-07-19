@@ -125,8 +125,12 @@ function commitPrompt(runDir, reviewSummary) {
     `full \`git -C ${runDir}/worktree diff\` against the run's base commit (in ` +
     `${runDir}/run.edn) and ${runDir}/spec.md. Write a scoped commit message: a ` +
     `\`<scope>: <imperative, lowercase>\` subject, then a body saying WHAT changed and WHY (the ` +
-    `spec's intent) — never a type-first Conventional-Commits prefix. \`git -C ${runDir}/worktree ` +
-    `add -A\` and commit on the current branch — exactly one commit. Then write ` +
+    `spec's intent) — never a type-first Conventional-Commits prefix. The stages committed their ` +
+    `own work-in-progress so it would survive a host move; collapse that history FIRST with ` +
+    `\`bash "$SKILL_DIR/algorithm/bin/run" squash --run ${runDir}\`, which soft-resets to the base ` +
+    `commit and leaves every change staged without altering a single file. Then \`git -C ` +
+    `${runDir}/worktree add -A\` and commit on the current branch — exactly one commit, the run's ` +
+    `only deliverable. Then write ` +
     `${args.commitRecordPath} with the sha and the full message.\n\n` +
     `--- Adversarial review verdict (for context; do not re-litigate it) ---\n${reviewSummary}`
   )

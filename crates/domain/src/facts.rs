@@ -1,6 +1,7 @@
 use crate::flow::{Flow, StageRef};
 use crate::phase::Phase;
 use crate::verdict::Verdict;
+use crate::worktree::{WorktreeFacts, WorktreeId};
 
 /// A run's identifier from `run.edn` `:run-id`. Never blank.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -98,6 +99,12 @@ pub struct FsFacts {
     pub gate: Option<Verdict>,
     /// The commit stage's `output/` holds a commit record.
     pub commit_recorded: bool,
+    /// The worktree's code as it stands now. `None` when the run dir carries
+    /// no `worktree.patch` — commit fails closed on `None`.
+    pub worktree: Option<WorktreeFacts>,
+    /// The worktree identity the gate report says it verified. `None` when
+    /// the report records none — commit fails closed on `None`.
+    pub gate_worktree: Option<WorktreeId>,
     pub phase: Phase,
     pub run_id: RunId,
 }

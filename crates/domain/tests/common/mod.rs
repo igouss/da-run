@@ -4,6 +4,7 @@
 use da_domain::{
     AdviseRuleSpec, BlockRuleSpec, DispatchRef, DispatchSpec, Flow, FlowSpec, FsFacts, Phase,
     RoleSpec, RunId, StageFacts, StageFactsMap, StageRef, StageSpec, SteerFacts, Verdict,
+    WorktreeFacts, WorktreeId,
 };
 use proptest::prelude::*;
 
@@ -148,9 +149,40 @@ pub fn fresh_facts(flow: &Flow) -> FsFacts {
         stages: StageFactsMap::from_fn(flow, |_stage: StageRef| StageFacts::empty()),
         gate: None,
         commit_recorded: false,
+        worktree: None,
+        gate_worktree: None,
         phase: Phase::SteadyState,
         run_id: RunId::new("test-run").unwrap(),
     }
+}
+
+/// `base` carrying code the gate has seen — the honest case, where the
+/// worktree holds a change and the gate report names that same change.
+pub fn with_gated_worktree(base: &FsFacts, id: &str) -> FsFacts {
+    let mut facts: FsFacts = base.clone();
+    facts.worktree = Some(WorktreeFacts {
+        id: WorktreeId::new(id).unwrap(),
+        empty: false,
+    });
+    facts.gate_worktree = Some(WorktreeId::new(id).unwrap());
+    facts
+}
+
+/// `base` with a worktree the gate never saw — the drift case.
+pub fn with_drifted_worktree(base: &FsFacts, verified: &str, current: &str) -> FsFacts {
+    let mut facts: FsFacts = with_gated_worktree(base, current);
+    facts.gate_worktree = Some(WorktreeId::new(verified).unwrap());
+    facts
+}
+
+/// `base` whose worktree holds no change at all.
+pub fn with_empty_worktree(base: &FsFacts, id: &str) -> FsFacts {
+    let mut facts: FsFacts = with_gated_worktree(base, id);
+    facts.worktree = Some(WorktreeFacts {
+        id: WorktreeId::new(id).unwrap(),
+        empty: true,
+    });
+    facts
 }
 
 /// `base` with one output file added to the stage named `name`.
@@ -216,13 +248,17 @@ pub fn arb_facts() -> impl Strategy<Value = FsFacts> {
         prop::option::of(arb_verdict()),
         any::<bool>(),
         arb_phase(),
+        prop::option::of(arb_worktree_facts()),
+        prop::option::of(arb_worktree_id()),
     )
         .prop_map(
-            move |(stages, gate, commit_recorded, phase): (
+            move |(stages, gate, commit_recorded, phase, worktree, gate_worktree): (
                 Vec<StageFacts>,
                 Option<Verdict>,
                 bool,
                 Phase,
+                Option<WorktreeFacts>,
+                Option<WorktreeId>,
             )| {
                 let mut remaining: std::vec::IntoIter<StageFacts> = stages.into_iter();
                 FsFacts {
@@ -231,9 +267,25 @@ pub fn arb_facts() -> impl Strategy<Value = FsFacts> {
                     }),
                     gate,
                     commit_recorded,
+                    worktree,
+                    gate_worktree,
                     phase,
                     run_id: RunId::new("prop-run").unwrap(),
                 }
             },
         )
+}
+
+/// A small identity alphabet, so drift and agreement both occur often enough
+/// to exercise the commit law rather than always disagreeing by chance.
+fn arb_worktree_id() -> impl Strategy<Value = WorktreeId> {
+    prop::sample::select(vec!["wt-a", "wt-b", "wt-c"])
+        .prop_map(|raw: &str| WorktreeId::new(raw).unwrap())
+}
+
+fn arb_worktree_facts() -> impl Strategy<Value = WorktreeFacts> {
+    (arb_worktree_id(), any::<bool>()).prop_map(|(id, empty): (WorktreeId, bool)| WorktreeFacts {
+        id,
+        empty,
+    })
 }

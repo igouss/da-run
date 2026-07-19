@@ -12,13 +12,27 @@
 ;;       Assemble the immutable run record (manifest, result.patch, gate-report, traces)
 ;;       under <records-root>/experiments/<round>/runs/<run-id>/ (records-root =
 ;;       $DA_RECORDS, else ~/.local/share/da-run/records).
+;;   bin/run seal    --run RUNDIR [--stage NAME]
+;;       Commit whatever the stage left in the worktree and refresh worktree.patch,
+;;       then publish to the mirror. Run after every stage: `git diff` alone omits
+;;       untracked files, so unsealed work is invisible to both record and mirror.
+;;   bin/run gate    --run RUNDIR
+;;       Seal, run the flow's gate script, and write its report with the sealed
+;;       worktree's identity — so a verdict can never describe code the gate did
+;;       not see. Exits with the gate's own status.
+;;   bin/run squash  --run RUNDIR
+;;       Soft-reset the stage commits back to the base commit, leaving every change
+;;       staged, so the commit stage writes exactly one clean commit. Content — and
+;;       so the worktree identity — is unchanged; refuses if that is ever untrue.
 ;;   bin/run restore --run-id RUNID [--into DIR]
 ;;       Rebuild a mirrored run on this machine: algorithm contracts from this repo,
 ;;       run.edn/flow.ron/spec/stage outputs from the DaRun mirror (needs
-;;       DA_STEER_INGRESS). The worktree is NOT restored — instructions are printed.
+;;       DA_STEER_INGRESS). The worktree is rebuilt from the base commit plus
+;;       worktree.patch when a clone holding that base is present.
 ;;   bin/run --selftest
 ;;
-;; Provenance model: ADR-0006. code -> the project's git; ephemera -> the run dir;
+;; Provenance model: ADR-0006. code -> the project's git AND worktree.patch (the branch
+;; is never pushed, so the patch is what crosses hosts); ephemera -> the run dir;
 ;; provenance + traces -> the frozen run record.
 
 (require '[clojure.string :as str]
@@ -124,6 +138,124 @@
       (throw (ex-info (str "flow.ron failed validation:\n"
                            (:out r) (when (seq (:err r)) (str "\n" (:err r)))) {})))))
 
+(defn run-flow
+  "The run's validated flow, as data. bin/state is the only parser."
+  [run]
+  (let [r (sh (str (repo-root) "/bin/state") "flow" "--run" run)]
+    (when-not (zero? (:exit r))
+      (throw (ex-info (str "could not read the run's flow:\n" (:out r)
+                           (when (seq (:err r)) (str "\n" (:err r)))) {})))
+    (json/parse-string (:out r) true)))
+
+(defn gate-stage [flow]
+  (or (first (filter #(= "gate" (:role %)) (:stages flow)))
+      (throw (ex-info "the flow declares no gate stage" {}))))
+
+;; ---- seal ----------------------------------------------------------------
+;;
+;; The worktree is the run's code, and until it is committed it is not durable:
+;; `git diff <base>` silently omits untracked files, so new tests and new source
+;; — the bulk of what a run produces — never reach the record or the mirror.
+;; Sealing closes that: stage the lot, commit it, and freeze the full diff as
+;; worktree.patch. The patch's sha256 is the worktree's identity, and it is what
+;; the gate records and the commit law checks.
+;;
+;; Stage commits are intermediate history. Stage 05 squashes them into the one
+;; clean commit that is the run's actual deliverable.
+
+(defn sha256
+  "Lowercase hex sha256 of a string's UTF-8 bytes — parity with sha256sum,
+   node's crypto, and adapter-fs's worktree_patch::digest."
+  [s]
+  (->> (.getBytes (str s) "UTF-8")
+       (.digest (java.security.MessageDigest/getInstance "SHA-256"))
+       (map #(format "%02x" %))
+       (apply str)))
+
+(defn seal!
+  "Commit whatever the stage left in the worktree and refresh worktree.patch.
+   Returns the worktree identity. Idempotent: a clean worktree commits nothing
+   and the patch is rewritten unchanged."
+  [run label]
+  (let [cfg  (edn/read-string (slurp (str run "/run.edn")))
+        wt   (str run "/worktree")
+        base (:base-commit cfg)]
+    (when-not (fs/directory? wt)
+      (throw (ex-info (str "no worktree at " wt " — nothing to seal") {})))
+    (let [add (sh "git" "-C" wt "add" "-A")]
+      (when-not (zero? (:exit add))
+        (throw (ex-info (str "git add failed: " (:err add)) {}))))
+    ;; `diff --cached --quiet` exits 1 exactly when something is staged.
+    (when-not (zero? (:exit (sh "git" "-C" wt "diff" "--cached" "--quiet")))
+      (let [c (sh "git" "-C" wt "commit" "-m" (str "wip(" label "): stage output"))]
+        (when-not (zero? (:exit c))
+          (throw (ex-info (str "git commit failed: " (:out c) " " (:err c)) {})))))
+    ;; --binary keeps new/binary files in the patch AND keeps it valid UTF-8
+    ;; (git armors binary hunks), so it rides the mirror's text artifact channel.
+    (let [patch (:out (p/sh "git" "-C" wt "diff" "--binary" base))
+          patch (or patch "")]
+      (spit (str run "/worktree.patch") patch)
+      ;; Publishing is part of making the stage durable, so it happens here
+      ;; rather than waiting for an operator to remember it. Best-effort: no
+      ;; mirror configured (or an unreachable one) must never fail a stage.
+      (let [n (sh (str (repo-root) "/bin/state") "notify" "--run" run)]
+        (when-not (zero? (:exit n))
+          (binding [*out* *err*]
+            (println (str "note: mirror not updated (" (:cmd-detail n) (:err n) ")")))))
+      (sha256 patch))))
+
+(defn seal [{:keys [run stage]}]
+  (when-not run (throw (ex-info "seal needs --run RUNDIR" {})))
+  (let [id (seal! run (or stage "stage"))]
+    (println (json/generate-string {:run-dir run :worktree-id id :sealed true}))))
+
+;; ---- squash --------------------------------------------------------------
+;;
+;; Stage commits exist so the code survives a host move; they are not the
+;; deliverable. Collapsing them back to the base commit leaves every change
+;; staged and nothing committed, so the commit stage writes the single clean
+;; commit it always wrote. Soft reset only — the worktree's contents, and so
+;; its identity, are untouched.
+
+(defn squash [{:keys [run]}]
+  (when-not run (throw (ex-info "squash needs --run RUNDIR" {})))
+  (let [cfg  (edn/read-string (slurp (str run "/run.edn")))
+        wt   (str run "/worktree")
+        base (:base-commit cfg)
+        before (sha256 (slurp (str run "/worktree.patch")))
+        r    (sh "git" "-C" wt "reset" "--soft" base)]
+    (when-not (zero? (:exit r))
+      (throw (ex-info (str "git reset --soft failed: " (:err r)) {})))
+    (let [after (sha256 (:out (p/sh "git" "-C" wt "diff" "--binary" base)))]
+      (when-not (= before after)
+        (throw (ex-info "squash changed the worktree's content — refusing to continue" {})))
+      (println (json/generate-string
+                {:run-dir run :squashed-to base :worktree-id after})))))
+
+;; ---- gate ----------------------------------------------------------------
+;;
+;; Sealing before the gate and recording the identity after it are one
+;; operation, so the report can never describe code the gate did not see.
+
+(defn gate [{:keys [run]}]
+  (when-not run (throw (ex-info "gate needs --run RUNDIR" {})))
+  (let [flow   (run-flow run)
+        stage  (gate-stage flow)
+        wt     (str run "/worktree")
+        script (str run "/stages/" (:dir stage) "/gate.sh")
+        report (str run "/stages/" (:dir stage) "/output/" (:artifact stage))
+        id     (seal! run (:name stage))
+        r      (p/sh {:dir wt} "bash" script)
+        body   (str (or (:out r) "") (when (seq (:err r)) (str "\n" (:err r))))]
+    (fs/create-dirs (fs/parent report))
+    ;; The identity goes in last: the verdict is only ever readable together
+    ;; with the code it judged.
+    (spit report (str body "\n\nWorktree: " id "\n"))
+    (println (json/generate-string
+              {:run-dir run :gate-report report :worktree-id id
+               :verdict (if (zero? (:exit r)) "green" "red")}))
+    (System/exit (:exit r))))
+
 ;; ---- setup ---------------------------------------------------------------
 
 (defn setup [{:keys [project spec arm round phase]}]
@@ -184,8 +316,13 @@
         rid     (:run-id cfg)
         wt      (str run "/worktree")
         out-dir (str (records-root) "/experiments/" round "/runs/" rid)
-        patch   (:out (sh "git" "-C" wt "diff" (:base-commit cfg)))
-        greport (let [g (str run "/stages/04-verify/output/gate-report.md")]
+        ;; Seal first: an unsealed worktree's untracked files (every new test,
+        ;; every new source file) are invisible to `git diff` and would be
+        ;; frozen out of the record entirely.
+        _       (seal! run "capture")
+        patch   (slurp (str run "/worktree.patch"))
+        greport (let [stage (gate-stage (run-flow run))
+                      g (str run "/stages/" (:dir stage) "/output/" (:artifact stage))]
                   (if (fs/exists? g) (slurp g) "(no gate report produced this run)"))
         session-dir (str (fs/home) "/.claude/projects/" (munge-cwd run))
         traces  (when (fs/exists? session-dir)
@@ -247,15 +384,38 @@
       (when-not (zero? (:exit r))
         (throw (ex-info (str "state restore failed:\n" (:out r)
                              (when (seq (:err r)) (str "\n" (:err r)))) {}))))
-    (let [cfg (edn/read-string (slurp (str run-dir "/run.edn")))]
+    ;; The code comes back from worktree.patch, not from the origin host's
+    ;; branch: that branch is never pushed, so it does not exist here. The
+    ;; patch is base-relative, so any clone holding the base commit will do.
+    (let [cfg     (edn/read-string (slurp (str run-dir "/run.edn")))
+          project (:project cfg)
+          wt      (str run-dir "/worktree")
+          patch   (str run-dir "/worktree.patch")
+          base    (:base-commit cfg)
+          have?   (and (fs/directory? project)
+                       (zero? (:exit (sh "git" "-C" project "cat-file" "-e"
+                                         (str base "^{commit}")))))
+          rebuilt (when have?
+                    (let [w (sh "git" "-C" project "worktree" "add" "-b" (:branch cfg) wt base)]
+                      (when-not (zero? (:exit w))
+                        (throw (ex-info (str "git worktree add failed: " (:err w)) {})))
+                      (when (and (fs/exists? patch) (seq (str/trim (slurp patch))))
+                        (let [a (sh "git" "-C" wt "apply" "--binary" patch)]
+                          (when-not (zero? (:exit a))
+                            (throw (ex-info (str "worktree.patch did not apply cleanly: "
+                                                 (:err a)) {})))))
+                      true))]
       (println (json/generate-string
-                {:run-id run-id :run-dir run-dir
-                 :next ["the worktree is not mirrored — recreate it from the target project's git:"
-                        (str "  git -C " (:project cfg) " worktree add " run-dir "/worktree " (:branch cfg))
-                        (str "  (branch absent on this machine? start it from the base commit: git -C "
-                             (:project cfg) " worktree add -b " (:branch cfg) " " run-dir "/worktree "
-                             (:base-commit cfg) ")")
-                        (str "status any time: bin/state status --run " run-dir " --pretty")]})))))
+                (merge {:run-id run-id :run-dir run-dir :worktree-restored (boolean rebuilt)}
+                       (if rebuilt
+                         {:next [(str "the worktree is rebuilt at " wt
+                                      " (base " base " + worktree.patch)")
+                                 (str "status any time: bin/state status --run " run-dir " --pretty")]}
+                         {:next [(str "no clone of " project " holding base commit " base
+                                      " on this machine — restore the code by hand:")
+                                 (str "  git -C <clone> worktree add -b " (:branch cfg) " " wt " " base)
+                                 (str "  git -C " wt " apply --binary " patch)
+                                 (str "status any time: bin/state status --run " run-dir " --pretty")]})))))))
 
 ;; ---- dispatch ------------------------------------------------------------
 
@@ -264,6 +424,9 @@
     (case cmd
       "selftest" (selftest)
       "setup"    (setup flags)
+      "seal"     (seal flags)
+      "squash"   (squash flags)
+      "gate"     (gate flags)
       "capture"  (capture flags)
       "restore"  (restore flags)
       (do (binding [*out* *err*]

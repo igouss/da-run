@@ -11,8 +11,12 @@ The gate. The deterministic edge: the change ships only if this goes green.
 
 ## Process
 
-1. From the worktree, run this stage's `gate.sh` — the **dispatcher**. It prefers the
-   project's own gate and keeps the champion generic:
+1. Run `bash "$SKILL_DIR/algorithm/bin/run" gate --run <runDir>`. It seals the worktree
+   first, then invokes this stage's `gate.sh` from the worktree, then writes the report
+   stamped with the sealed worktree's identity — so the verdict can never outlive the code
+   it judged. Never invoke `gate.sh` directly: an unstamped report names no code, and the
+   commit law refuses it. `gate.sh` is the **dispatcher**. It prefers the project's own gate
+   and keeps the champion generic:
    - `<worktree>/.da/gate` present & executable → the project owns its bar, run it;
    - present but not executable → **FAIL closed** (never a silent fallback);
    - absent → run `default-gate.sh` (the generic host chain).

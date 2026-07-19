@@ -5,6 +5,7 @@ use crate::phase::Phase;
 use crate::refusal::Refusal;
 use crate::verdict::Verdict;
 use crate::warning::Warning;
+use crate::worktree::{WorktreeFacts, WorktreeId};
 
 /// A dispatch the machine allows, with advisory warnings.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -54,20 +55,47 @@ pub fn check(flow: &Flow, facts: &FsFacts, dispatch: DispatchRef) -> Result<Allo
     Ok(Allowed { warnings })
 }
 
-/// The commit precondition: no pending steer and a green gate. Absent or
-/// unparseable gate report fails closed.
+/// The commit precondition: no pending steer, a green gate, and a worktree
+/// that still holds the very code the gate went green on.
+///
+/// The gate verdict alone is not enough. It is text in a file, and a run
+/// restored onto another host carries that text with it — so a verdict read
+/// in isolation will happily bless a worktree that lost its code in transit.
+/// Every unknown fails closed: absent patch, absent gate identity, and an
+/// unparseable verdict all refuse.
 pub fn commit_precondition(flow: &Flow, facts: &FsFacts) -> Result<GateGreenProof, Refusal> {
     let parked: Vec<String> = pending_steers(flow, facts);
     if !parked.is_empty() {
         return Err(Refusal::SteerPending { stages: parked });
     }
-    match facts.gate {
-        Some(Verdict::Green) => Ok(GateGreenProof(())),
-        gate => Err(Refusal::CommitBeforeGreenGate {
-            gate,
+    if !matches!(facts.gate, Some(Verdict::Green)) {
+        return Err(Refusal::CommitBeforeGreenGate {
+            gate: facts.gate,
             gate_report: flow.gate_report_path(),
-        }),
+        });
     }
+    let worktree: &WorktreeFacts = facts.worktree.as_ref().ok_or(Refusal::WorktreeAbsent)?;
+    if worktree.empty {
+        return Err(Refusal::WorktreeEmpty);
+    }
+    // An unrecorded gate identity is a mismatch, not a pass: a report that
+    // cannot name the code it verified has not verified this code.
+    let verified: &WorktreeId = facts
+        .gate_worktree
+        .as_ref()
+        .ok_or_else(|| Refusal::WorktreeMovedSinceGate {
+            verified: "(unrecorded)".to_string(),
+            current: worktree.id.to_string(),
+            gate_report: flow.gate_report_path(),
+        })?;
+    if verified != &worktree.id {
+        return Err(Refusal::WorktreeMovedSinceGate {
+            verified: verified.to_string(),
+            current: worktree.id.to_string(),
+            gate_report: flow.gate_report_path(),
+        });
+    }
+    Ok(GateGreenProof(()))
 }
 
 fn ordering_violation(rule: &BlockRule) -> Refusal {

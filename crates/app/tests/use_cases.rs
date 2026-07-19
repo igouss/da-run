@@ -138,6 +138,8 @@ fn facts_with_design(flow: &Flow) -> FsFacts {
         }),
         gate: None,
         commit_recorded: false,
+        worktree: None,
+        gate_worktree: None,
         phase: Phase::SteadyState,
         run_id: RunId::new("use-case-run").unwrap(),
     }

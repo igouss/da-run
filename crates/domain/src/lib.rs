@@ -22,6 +22,7 @@ mod run_state;
 mod transition;
 mod verdict;
 mod warning;
+mod worktree;
 
 pub use anomaly::Anomaly;
 pub use derive::{Derived, derive};
@@ -36,3 +37,4 @@ pub use run_state::RunState;
 pub use transition::{Allowed, GateGreenProof, check, commit_precondition};
 pub use verdict::Verdict;
 pub use warning::Warning;
+pub use worktree::{BlankWorktreeId, WorktreeFacts, WorktreeId};

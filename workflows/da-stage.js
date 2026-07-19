@@ -58,7 +58,8 @@ if (!owner) {
 if (owner.role === 'gate') {
   throw new Error(
     `da-stage refuses "${input.stage}": the mechanical gate is never a workflow (ADR-0028 §3). ` +
-      `Run it yourself: (cd <runDir>/worktree && bash ../stages/${owner.dir}/gate.sh), then read ` +
+      `Run it yourself: bash "$SKILL_DIR/algorithm/bin/run" gate --run <runDir> (which seals the ` +
+      `worktree and stamps the report with its identity), then read ` +
       `GATE GREEN / GATE RED from stages/${owner.dir}/output/${owner.artifact}.`
   )
 }
