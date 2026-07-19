@@ -12,6 +12,8 @@ use std::path::{Path, PathBuf};
 /// Files never counted as stage output.
 const GITKEEP: &str = ".gitkeep";
 const STEER_FILE: &str = "STEER-REQUEST.md";
+/// The orchestrator-verified commit marker (`bin/run record-commit`).
+pub const COMMIT_VERIFIED: &str = "commit-verified";
 
 /// Reads a run dir (as laid out by `bin/run setup`) into [`FsFacts`].
 pub struct FsSnapshotSource;
@@ -44,8 +46,13 @@ impl SnapshotSource for FsSnapshotSource {
         let gate: Option<Verdict> = report.as_deref().and_then(gate_verdict);
         let gate_worktree: Option<WorktreeId> = report.as_deref().and_then(gate_worktree);
         let worktree: Option<WorktreeFacts> = read_worktree(run_dir)?;
-        let (commit_ref, _): (StageRef, &StageDef) = flow.commit();
-        let commit_recorded: bool = stages.get(commit_ref).has_output();
+        // The commit fact is the orchestrator's verified marker, written by
+        // `bin/run record-commit` only after the sha resolves in the
+        // worktree's git — never the commit agent's own output. An agent
+        // that wrote commit.md over a failed `git commit` used to derive
+        // Committed with no commit on the branch (da-run's recorded
+        // commit-record-trust gap, closed here).
+        let commit_recorded: bool = run_dir.join(COMMIT_VERIFIED).is_file();
         Ok(FsFacts {
             stages,
             gate,

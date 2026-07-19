@@ -160,13 +160,23 @@ fn answered_steer_is_not_pending() {
     assert!(!facts.stages.get(stage_ref(&flow, "build")).steer_pending());
 }
 
-// Scenario: a commit record marks the run committed
+// Scenario: only the orchestrator's verified marker marks the run committed
 #[test]
-fn commit_output_marks_commit_recorded() {
+fn verified_marker_marks_commit_recorded() {
+    let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
+    fs::write(dir.path().join("commit-verified"), "Commit: abc123\n").unwrap();
+    let facts: FsFacts = snapshot(&dir, &flow).unwrap();
+    assert!(facts.commit_recorded);
+}
+
+// Scenario: a commit agent's own output is a claim, not evidence — without
+// the verified marker the run must not derive as committed
+#[test]
+fn commit_output_alone_is_not_commit_recorded() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
     write_output(&dir, &flow, "land", "commit.md", "scoped: message");
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
-    assert!(facts.commit_recorded);
+    assert!(!facts.commit_recorded);
 }
 
 // Scenario: not a run dir

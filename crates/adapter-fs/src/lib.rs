@@ -12,7 +12,7 @@ mod steer_file;
 mod worktree_patch;
 
 pub use flow_ron::{FLOW_FILE, FlowLoadError, load_flow_file, load_run_flow};
-pub use fs_snapshot::FsSnapshotSource;
+pub use fs_snapshot::{COMMIT_VERIFIED, FsSnapshotSource};
 pub use gate_report::{gate_verdict, gate_worktree};
 pub use run_artifacts::{FsArtifactSink, FsArtifactSource};
 pub use run_edn::{EdnFacts, extract_edn_facts};

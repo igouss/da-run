@@ -9,7 +9,13 @@ use std::path::{Component, Path, PathBuf};
 /// worktree.patch until the first stage commits). `worktree.patch` is what
 /// makes the mirror sufficient on its own: it carries the run's code, so a
 /// restore needs neither the origin host's paths nor a pushed branch.
-const ROOT_FILES: [&str; 4] = ["run.edn", "flow.ron", "spec.md", "worktree.patch"];
+const ROOT_FILES: [&str; 5] = [
+    "run.edn",
+    "flow.ron",
+    "spec.md",
+    "worktree.patch",
+    "commit-verified",
+];
 const GITKEEP: &str = ".gitkeep";
 
 /// Reads a run dir's artifacts: root files plus every stage's output/ files.

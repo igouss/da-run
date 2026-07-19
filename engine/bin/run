@@ -284,6 +284,42 @@
       (println (json/generate-string
                 {:run-dir run :squashed-to base :worktree-id after})))))
 
+;; ---- record-commit --------------------------------------------------------
+;;
+;; The commit stage's agent runs `git commit` and reports a sha — a claim,
+;; not evidence. This resolves the branch tip in the worktree's own git and
+;; writes the verified marker (`commit-verified`) that da-state derives
+;; Committed from. Refuses when the tip has not moved beyond base or does
+;; not sit directly on it (squash first). The orchestrator verifies, the
+;; agent only reports.
+
+(defn record-commit [{:keys [run]}]
+  (when-not run (throw (ex-info "record-commit needs --run RUNDIR" {})))
+  (let [cfg  (edn/read-string (slurp (str run "/run.edn")))
+        wt   (str run "/worktree")
+        base (:base-commit cfg)
+        head-r (sh "git" "-C" wt "rev-parse" "HEAD")
+        head (:out head-r)]
+    (when-not (and (zero? (:exit head-r)) (seq head))
+      (throw (ex-info (str "cannot resolve HEAD in " wt ": " (:err head-r)) {})))
+    (when (= head base)
+      (throw (ex-info (str "no commit beyond base " base
+                           " — the branch tip has not moved; the commit stage's report"
+                           " was a claim without a commit. Re-run the commit stage.")
+                      {})))
+    (let [parent-r (sh "git" "-C" wt "rev-parse" (str head "^"))
+          parent   (:out parent-r)]
+      (when-not (and (zero? (:exit parent-r)) (= parent base))
+        (throw (ex-info (str "HEAD " head " does not sit directly on base " base
+                             " (parent " (if (seq parent) parent "unresolvable")
+                             ") — squash the stage commits before recording")
+                        {}))))
+    (spit (str run "/commit-verified")
+          (str "Commit: " head "\nBase: " base "\nBranch: " (:branch cfg) "\n"))
+    ;; The new fact rides the mirror like every other root artifact.
+    (sh (str (engine-root) "/bin/state") "notify" "--run" run)
+    (println (json/generate-string {:run-dir run :commit head :verified true}))))
+
 ;; ---- gate ----------------------------------------------------------------
 ;;
 ;; Sealing before the gate and recording the identity after it are one
@@ -506,10 +542,12 @@
       "seal"     (seal flags)
       "squash"   (squash flags)
       "gate"     (gate flags)
+      "record-commit" (record-commit flags)
       "capture"  (capture flags)
       "restore"  (restore flags)
       (do (binding [*out* *err*]
             (println "usage: bin/run setup --project P --spec S [--arm folder] [--round R]")
+            (println "       bin/run record-commit --run RUNDIR")
             (println "       bin/run capture --run RUNDIR [--round R]")
             (println "       bin/run restore --run-id RUNID [--into DIR]")
             (println "       bin/run --selftest"))
