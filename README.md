@@ -120,9 +120,21 @@ stay canonical — ADR-0029 extended to the whole run) and answers `check <stage
 steer-pending (exit 3), or a typed ordering refusal (exit 4). No path reaches "commit allowed"
 without a green gate and no pending steer — that law is property-tested and backed by an
 unforgeable proof token in the domain crate. `da-stage.js` refuses to run without a passing
-check in its args. Optionally, `da-state notify` mirrors the derived state to a `DaRun`
-Restate virtual object beside DaSteer, so anything on the tailnet can read run status without
-touching the run dir.
+check in its args.
+
+The pipeline itself — stage names, dirs, dispatch kinds, ordering guards, per-stage model
+tiers — is not compiled in anywhere: **`algorithm/flow.ron`** is the single source of truth,
+snapshotted into every run dir and validated at load time by the domain's `Flow::from_spec`
+(bad flow, no run). Every consumer reads it through `bin/state flow` as validated JSON:
+`bin/run` fail-fasts on it at setup, `workspace-lint` checks `stages/` on disk against it,
+and `da-stage.js` requires it as `args.flow`. The machine's laws (steer parks everything,
+commit demands a green gate) stay in code and are not configurable.
+
+`da-state notify` mirrors the derived state AND the run's artifacts (run.edn, flow.ron,
+spec.md, every stage's outputs) to a `DaRun` Restate virtual object beside DaSteer — anything
+on the tailnet can read run status without touching the run dir, and a mirrored run can be
+rebuilt on another machine with `bin/run restore --run-id <id>` (the worktree is recreated
+from the target project's git, per run.edn).
 
 ```mermaid
 flowchart TD
@@ -174,19 +186,20 @@ da-run/
   algorithm/
     CLAUDE.md             the factory's identity + folder map (L0)
     CONTEXT.md             task routing (L1)
+    flow.ron               THE pipeline definition: stages, dirs, dispatch kinds, guards
     references/            house standards: hexagonal/ECB, testing, Rust (L3)
     stages/01..05           stage contracts (Inputs/Process/Outputs/Audit) + gate scripts
-    bin/run                 run-instance driver (setup / capture), babashka
+    bin/run                 run-instance driver (setup / capture / restore), babashka
     bin/state               run-state authority wrapper (builds/execs da-state)
-    bin/workspace-lint       fitness functions for the algorithm folder itself
+    bin/workspace-lint       fitness functions incl. stages/ <-> flow.ron consistency
   crates/                 the da-state workspace (hexagonal: domain / ports / app / adapters)
-    domain/                 the pure state machine: facts -> derive/check, typed refusals
-    ports/                  SnapshotSource + RunMirror traits
-    app/                    status / check-dispatch / publish-mirror use cases
-    adapter-fs/             run-dir reader (bb-parity steer + gate parsing)
-    adapter-restate/        DaRun mirror publisher (curl, bin/steer transport parity)
-    wire/                   versioned JSON shapes (CLI output + mirror payload)
-  bins/da-state/          composition root: derive / status / check / notify / selftest
+    domain/                 the pure state machine + Flow validation (load-time, typed errors)
+    ports/                  SnapshotSource / RunMirror / Artifact traits
+    app/                    status / check-dispatch / publish-mirror / restore-run use cases
+    adapter-fs/             run-dir reader + flow.ron loader + artifact collect/materialize
+    adapter-restate/        DaRun mirror client (reqwest + rustls; no curl subprocess)
+    wire/                   versioned JSON shapes (CLI output, mirror + flow payloads)
+  bins/da-state/          composition root: derive / status / check / flow / notify / restore / selftest
 ```
 
 ## Provenance capture (optional)

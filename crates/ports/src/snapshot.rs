@@ -1,4 +1,4 @@
-use da_domain::FsFacts;
+use da_domain::{Flow, FsFacts};
 use std::path::{Path, PathBuf};
 
 /// Why a run dir could not be snapshotted into facts.
@@ -13,7 +13,8 @@ pub enum SnapshotError {
     Io { path: PathBuf, detail: String },
 }
 
-/// Reads a run dir into a refined [`FsFacts`] snapshot.
+/// Reads a run dir into a refined [`FsFacts`] snapshot, over the flow that
+/// names the stage dirs.
 pub trait SnapshotSource {
-    fn snapshot(&self, run_dir: &Path) -> Result<FsFacts, SnapshotError>;
+    fn snapshot(&self, flow: &Flow, run_dir: &Path) -> Result<FsFacts, SnapshotError>;
 }

@@ -1,13 +1,151 @@
 #![allow(clippy::unwrap_used)]
 #![allow(dead_code)]
 
-use da_domain::{FsFacts, Phase, RunId, StageFacts, StageFactsMap, StageId, SteerFacts, Verdict};
+use da_domain::{
+    AdviseRuleSpec, BlockRuleSpec, DispatchRef, DispatchSpec, Flow, FlowSpec, FsFacts, Phase,
+    RoleSpec, RunId, StageFacts, StageFactsMap, StageRef, StageSpec, SteerFacts, Verdict,
+};
 use proptest::prelude::*;
 
+/// The canonical five-stage flow, mirrored as a code fixture so the domain
+/// tests stay filesystem-free.
+pub fn test_flow() -> Flow {
+    Flow::from_spec(test_spec()).unwrap()
+}
+
+pub fn test_spec() -> FlowSpec {
+    FlowSpec {
+        initial_label: "specced".to_string(),
+        stages: vec![
+            stage(
+                "design",
+                "01-design",
+                RoleSpec::Handoff {
+                    done_label: "designed".to_string(),
+                },
+                vec![
+                    dispatch("design", vec![], vec![], false),
+                    dispatch(
+                        "design-review",
+                        vec![],
+                        vec![advise("design", "design-review-without-design")],
+                        false,
+                    ),
+                ],
+            ),
+            stage(
+                "tests",
+                "02-tests",
+                RoleSpec::Handoff {
+                    done_label: "tested".to_string(),
+                },
+                vec![dispatch(
+                    "tests",
+                    vec![block(
+                        "design",
+                        "tests-before-design",
+                        "tests before stages/01-design/output/ has a design",
+                    )],
+                    vec![],
+                    false,
+                )],
+            ),
+            stage(
+                "implement",
+                "03-implement",
+                RoleSpec::Handoff {
+                    done_label: "implemented".to_string(),
+                },
+                vec![dispatch(
+                    "implement",
+                    vec![block(
+                        "tests",
+                        "implement-before-tests",
+                        "implement before stages/02-tests/output/ has a test plan",
+                    )],
+                    vec![],
+                    true,
+                )],
+            ),
+            stage(
+                "verify",
+                "04-verify",
+                RoleSpec::Gate,
+                vec![dispatch(
+                    "verify",
+                    vec![],
+                    vec![advise("implement", "verify-without-implementation")],
+                    false,
+                )],
+            ),
+            stage(
+                "commit",
+                "05-commit",
+                RoleSpec::Commit,
+                vec![dispatch("commit", vec![], vec![], false)],
+            ),
+        ],
+    }
+}
+
+pub fn stage(name: &str, dir: &str, role: RoleSpec, dispatches: Vec<DispatchSpec>) -> StageSpec {
+    StageSpec {
+        name: name.to_string(),
+        dir: dir.to_string(),
+        role,
+        artifact: if name == "verify" {
+            Some("gate-report.md".to_string())
+        } else {
+            None
+        },
+        dispatches,
+    }
+}
+
+pub fn dispatch(
+    kind: &str,
+    blocking: Vec<BlockRuleSpec>,
+    advisory: Vec<AdviseRuleSpec>,
+    warn_on_red_gate: bool,
+) -> DispatchSpec {
+    DispatchSpec {
+        kind: kind.to_string(),
+        blocking,
+        advisory,
+        warn_on_red_gate,
+        model: None,
+        strategy: None,
+        effort: None,
+    }
+}
+
+pub fn block(stage: &str, code: &str, detail: &str) -> BlockRuleSpec {
+    BlockRuleSpec {
+        stage: stage.to_string(),
+        code: code.to_string(),
+        detail: detail.to_string(),
+    }
+}
+
+pub fn advise(stage: &str, code: &str) -> AdviseRuleSpec {
+    AdviseRuleSpec {
+        stage: stage.to_string(),
+        code: code.to_string(),
+    }
+}
+
+pub fn stage_ref(flow: &Flow, name: &str) -> StageRef {
+    flow.stage_named(name).unwrap()
+}
+
+pub fn dispatch_ref(flow: &Flow, kind: &str) -> DispatchRef {
+    flow.resolve_dispatch(kind).unwrap()
+}
+
 /// A fresh run: spec only, nothing produced, steady-state.
-pub fn fresh_facts() -> FsFacts {
+pub fn fresh_facts(flow: &Flow) -> FsFacts {
     FsFacts {
-        stages: StageFactsMap::from_fn(|_id: StageId| StageFacts::empty()),
+        stages: StageFactsMap::from_fn(flow, |_stage: StageRef| StageFacts::empty()),
         gate: None,
         commit_recorded: false,
         phase: Phase::SteadyState,
@@ -15,12 +153,13 @@ pub fn fresh_facts() -> FsFacts {
     }
 }
 
-/// `base` with one output file added to `stage`.
-pub fn with_output(base: &FsFacts, stage: StageId, file: &str) -> FsFacts {
+/// `base` with one output file added to the stage named `name`.
+pub fn with_output(flow: &Flow, base: &FsFacts, name: &str, file: &str) -> FsFacts {
+    let target: StageRef = stage_ref(flow, name);
     let mut facts: FsFacts = base.clone();
-    facts.stages = StageFactsMap::from_fn(|id: StageId| {
-        let mut stage_facts: StageFacts = base.stages.get(id).clone();
-        if id == stage {
+    facts.stages = StageFactsMap::from_fn(flow, |stage: StageRef| {
+        let mut stage_facts: StageFacts = base.stages.get(stage).clone();
+        if stage == target {
             stage_facts.output_files.push(file.to_string());
         }
         stage_facts
@@ -28,12 +167,13 @@ pub fn with_output(base: &FsFacts, stage: StageId, file: &str) -> FsFacts {
     facts
 }
 
-/// `base` with a steer-request at `stage`.
-pub fn with_steer(base: &FsFacts, stage: StageId, answered: bool) -> FsFacts {
+/// `base` with a steer-request at the stage named `name`.
+pub fn with_steer(flow: &Flow, base: &FsFacts, name: &str, answered: bool) -> FsFacts {
+    let target: StageRef = stage_ref(flow, name);
     let mut facts: FsFacts = base.clone();
-    facts.stages = StageFactsMap::from_fn(|id: StageId| {
-        let mut stage_facts: StageFacts = base.stages.get(id).clone();
-        if id == stage {
+    facts.stages = StageFactsMap::from_fn(flow, |stage: StageRef| {
+        let mut stage_facts: StageFacts = base.stages.get(stage).clone();
+        if stage == target {
             stage_facts.steer = Some(SteerFacts { answered });
         }
         stage_facts
@@ -42,10 +182,10 @@ pub fn with_steer(base: &FsFacts, stage: StageId, answered: bool) -> FsFacts {
 }
 
 /// A run with design, tests, and implementation outputs present.
-pub fn implemented_facts() -> FsFacts {
-    let designed: FsFacts = with_output(&fresh_facts(), StageId::Design, "design.md");
-    let tested: FsFacts = with_output(&designed, StageId::Tests, "test-plan.md");
-    with_output(&tested, StageId::Implement, "notes.md")
+pub fn implemented_facts(flow: &Flow) -> FsFacts {
+    let designed: FsFacts = with_output(flow, &fresh_facts(flow), "design", "design.md");
+    let tested: FsFacts = with_output(flow, &designed, "tests", "test-plan.md");
+    with_output(flow, &tested, "implement", "notes.md")
 }
 
 pub fn arb_stage_facts() -> impl Strategy<Value = StageFacts> {
@@ -70,26 +210,24 @@ pub fn arb_phase() -> impl Strategy<Value = Phase> {
 }
 
 pub fn arb_facts() -> impl Strategy<Value = FsFacts> {
+    let flow: Flow = test_flow();
     (
-        prop::collection::vec(arb_stage_facts(), 5),
+        prop::collection::vec(arb_stage_facts(), flow.stage_count()),
         prop::option::of(arb_verdict()),
         any::<bool>(),
         arb_phase(),
     )
         .prop_map(
-            |(stages, gate, commit_recorded, phase): (
+            move |(stages, gate, commit_recorded, phase): (
                 Vec<StageFacts>,
                 Option<Verdict>,
                 bool,
                 Phase,
             )| {
+                let mut remaining: std::vec::IntoIter<StageFacts> = stages.into_iter();
                 FsFacts {
-                    stages: StageFactsMap::from_fn(|id: StageId| {
-                        let index: usize = StageId::ALL
-                            .iter()
-                            .position(|candidate: &StageId| *candidate == id)
-                            .unwrap();
-                        stages[index].clone()
+                    stages: StageFactsMap::from_fn(&flow, |_stage: StageRef| {
+                        remaining.next().unwrap_or_else(StageFacts::empty)
                     }),
                     gate,
                     commit_recorded,

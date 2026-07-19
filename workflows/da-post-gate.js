@@ -10,12 +10,17 @@ export const meta = {
 }
 
 // args (all required — this workflow never touches the filesystem itself, so every
-// path an agent needs must arrive pre-resolved):
-//   runDir     absolute path to the run instance (holds CLAUDE.md, stages/, worktree/, run.edn)
-//   worktree   absolute path to the target project's worktree (runDir + '/worktree')
-//   round      the round id (for labeling only)
-//   commitModel  model id for the commit stage (System A pins 'sonnet' per ADR-0009; a
-//                dynamic-arm plan may override it — the CALLER decides, this workflow just uses it)
+// path an agent needs must arrive pre-resolved by the caller from the run's flow.ron;
+// no stage dir or artifact name lives in this script):
+//   runDir           absolute path to the run instance (holds CLAUDE.md, stages/, worktree/, run.edn)
+//   worktree         absolute path to the target project's worktree (runDir + '/worktree')
+//   round            the round id (for labeling only)
+//   commitModel      model id for the commit stage (the flow pins it per ADR-0009; a
+//                    dynamic-arm plan may override it — the CALLER decides, this workflow just uses it)
+//   testPlanPath     absolute path to the test plan artifact (the tests handoff's output)
+//   gateReportPath   absolute path to the mechanical gate's verdict report
+//   reviewPath       absolute path where the adversarial review verdict is published
+//   commitRecordPath absolute path where the commit stage records the sha + message
 
 const DEFECT_CLASSES = [
   'spec-completeness', 'spec-misreading', 'compile-toolchain', 'integration-wiring',
@@ -78,11 +83,12 @@ const COMMIT_SCHEMA = {
 
 function atomizePrompt(runDir) {
   return (
-    `Read ${runDir}/stages/02-tests/output/test-plan.md and the tests it describes in ` +
+    `Read ${args.testPlanPath} and the tests it describes in ` +
     `${runDir}/worktree. List every Gherkin scenario (or property, treated as one scenario) that ` +
-    `stage 02 wrote for this change, in the schema's shape. Do not invent scenarios that are not ` +
-    `in the test plan or the worktree's tests; do not merge distinct zero/one/many cases into one ` +
-    `entry — each is its own scenario. This is a read-only reconnaissance step: make no edits.`
+    `the tests stage wrote for this change, in the schema's shape. Do not invent scenarios that ` +
+    `are not in the test plan or the worktree's tests; do not merge distinct zero/one/many cases ` +
+    `into one entry — each is its own scenario. This is a read-only reconnaissance step: make no ` +
+    `edits.`
   )
 }
 
@@ -114,14 +120,14 @@ function holisticPrompt(runDir) {
 
 function commitPrompt(runDir, reviewSummary) {
   return (
-    `Stage 05 — commit. The mechanical gate at ${runDir}/stages/04-verify/output/gate-report.md ` +
+    `The commit stage. The mechanical gate at ${args.gateReportPath} ` +
     `is GREEN and the atomized adversarial review below found no unresolved violation. Read the ` +
     `full \`git -C ${runDir}/worktree diff\` against the run's base commit (in ` +
     `${runDir}/run.edn) and ${runDir}/spec.md. Write a scoped commit message: a ` +
     `\`<scope>: <imperative, lowercase>\` subject, then a body saying WHAT changed and WHY (the ` +
     `spec's intent) — never a type-first Conventional-Commits prefix. \`git -C ${runDir}/worktree ` +
     `add -A\` and commit on the current branch — exactly one commit. Then write ` +
-    `${runDir}/stages/05-commit/output/commit.md with the sha and the full message.\n\n` +
+    `${args.commitRecordPath} with the sha and the full message.\n\n` +
     `--- Adversarial review verdict (for context; do not re-litigate it) ---\n${reviewSummary}`
   )
 }
@@ -194,7 +200,7 @@ const blocked = violations.length > 0 || dropped > 0 || holistic.verdict === 'no
 
 phase('Commit')
 const publish = await agent(
-  `Write the file ${args.runDir}/stages/04-verify/output/adversarial-review.md with EXACTLY this ` +
+  `Write the file ${args.reviewPath} with EXACTLY this ` +
     `content (verbatim, no edits):\n\n---BEGIN---\n${reviewMd}\n---END---`,
   { label: 'publish-review', model: 'haiku', schema: { type: 'object', properties: { written: { type: 'boolean' } }, required: ['written'] } }
 )

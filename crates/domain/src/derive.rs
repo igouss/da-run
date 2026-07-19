@@ -1,65 +1,76 @@
 use crate::anomaly::Anomaly;
 use crate::facts::FsFacts;
+use crate::flow::{Flow, Role, StageDef, StageRef};
 use crate::phase::Phase;
 use crate::run_state::RunState;
-use crate::stage::StageId;
 
 /// The derived view of a run: summary state, parked stages, anomalies.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Derived {
     pub state: RunState,
-    /// Stages holding an unanswered steer-request, in pipeline order.
-    pub parked: Vec<StageId>,
+    /// Dirs of stages holding an unanswered steer-request, in pipeline order.
+    pub parked: Vec<String>,
     pub phase: Phase,
     pub anomalies: Vec<Anomaly>,
 }
 
 /// Fold a facts snapshot into the derived view. Total — never panics.
-pub fn derive(facts: &FsFacts) -> Derived {
+pub fn derive(flow: &Flow, facts: &FsFacts) -> Derived {
     Derived {
-        state: summarize(facts),
-        parked: pending_steers(facts),
+        state: summarize(flow, facts),
+        parked: pending_steers(flow, facts),
         phase: facts.phase,
-        anomalies: find_anomalies(facts),
+        anomalies: find_anomalies(flow, facts),
     }
 }
 
-/// Stages with an unanswered steer-request, in pipeline order.
-pub(crate) fn pending_steers(facts: &FsFacts) -> Vec<StageId> {
-    StageId::ALL
-        .into_iter()
-        .filter(|id: &StageId| facts.stages.get(*id).steer_pending())
+/// Dirs of stages with an unanswered steer-request, in pipeline order.
+pub(crate) fn pending_steers(flow: &Flow, facts: &FsFacts) -> Vec<String> {
+    flow.stages()
+        .filter(|(stage, _): &(StageRef, &StageDef)| facts.stages.get(*stage).steer_pending())
+        .map(|(_, def): (StageRef, &StageDef)| def.dir.clone())
         .collect()
 }
 
-fn summarize(facts: &FsFacts) -> RunState {
+fn summarize(flow: &Flow, facts: &FsFacts) -> RunState {
     if facts.commit_recorded {
         return RunState::Committed;
     }
     if let Some(verdict) = facts.gate {
         return RunState::Gated(verdict);
     }
-    if facts.stages.get(StageId::Implement).has_output() {
-        return RunState::Implemented;
+    let furthest: Option<(String, u8)> = flow
+        .handoffs()
+        .into_iter()
+        .rev()
+        .find(|(stage, _, _): &(StageRef, &StageDef, u8)| facts.stages.get(*stage).has_output())
+        .and_then(
+            |(_, def, rank): (StageRef, &StageDef, u8)| match &def.role {
+                Role::Handoff { done_label } => Some((done_label.clone(), rank)),
+                _ => None,
+            },
+        );
+    match furthest {
+        Some((label, rank)) => RunState::HandoffDone { label, rank },
+        None => RunState::Pending {
+            label: flow.initial_label().to_string(),
+        },
     }
-    if facts.stages.get(StageId::Tests).has_output() {
-        return RunState::Tested;
-    }
-    if facts.stages.get(StageId::Design).has_output() {
-        return RunState::Designed;
-    }
-    RunState::Specced
 }
 
 /// A later handoff with output while an earlier one is empty, over the
-/// design → tests → implement chain.
-fn find_anomalies(facts: &FsFacts) -> Vec<Anomaly> {
-    const HANDOFF_CHAIN: [StageId; 3] = [StageId::Design, StageId::Tests, StageId::Implement];
+/// flow's handoff chain.
+fn find_anomalies(flow: &Flow, facts: &FsFacts) -> Vec<Anomaly> {
+    let chain: Vec<(StageRef, &StageDef, u8)> = flow.handoffs();
     let mut anomalies: Vec<Anomaly> = Vec::new();
-    for pair in HANDOFF_CHAIN.windows(2) {
-        let (earlier, later): (StageId, StageId) = (pair[0], pair[1]);
+    for pair in chain.windows(2) {
+        let (earlier, earlier_def, _): (StageRef, &StageDef, u8) = pair[0];
+        let (later, later_def, _): (StageRef, &StageDef, u8) = pair[1];
         if facts.stages.get(later).has_output() && !facts.stages.get(earlier).has_output() {
-            anomalies.push(Anomaly::LaterOutputWithoutEarlier { later, earlier });
+            anomalies.push(Anomaly::LaterOutputWithoutEarlier {
+                later: later_def.dir.clone(),
+                earlier: earlier_def.dir.clone(),
+            });
         }
     }
     anomalies

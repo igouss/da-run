@@ -1,5 +1,5 @@
 use crate::WIRE_VERSION;
-use da_domain::{Allowed, Refusal, StageId, Verdict, Warning};
+use da_domain::{Allowed, Refusal, Verdict, Warning};
 use serde::{Deserialize, Serialize};
 
 /// The `check` output: allowed with warnings, or refused with a typed reason.
@@ -57,17 +57,13 @@ impl CheckWire {
 
 fn warning_wire(warning: &Warning) -> WarningWire {
     match warning {
-        Warning::DesignReviewWithoutDesign => WarningWire {
-            code: "design-review-without-design".to_string(),
-            stage: None,
-        },
-        Warning::VerifyWithoutImplementation => WarningWire {
-            code: "verify-without-implementation".to_string(),
+        Warning::Advisory { code } => WarningWire {
+            code: code.clone(),
             stage: None,
         },
         Warning::StageAlreadyComplete { stage } => WarningWire {
             code: "stage-already-complete".to_string(),
-            stage: Some(stage.dir_name().to_string()),
+            stage: Some(stage.clone()),
         },
         Warning::RedGateRework => WarningWire {
             code: "red-gate-rework".to_string(),
@@ -83,19 +79,13 @@ fn warning_wire(warning: &Warning) -> WarningWire {
 fn reason_wire(refusal: &Refusal) -> ReasonWire {
     let detail: String = refusal.to_string();
     match refusal {
-        Refusal::TestsBeforeDesign => ReasonWire {
-            code: "tests-before-design".to_string(),
+        Refusal::OrderingViolation { code, .. } => ReasonWire {
+            code: code.clone(),
             detail,
             gate: None,
             stages: Vec::new(),
         },
-        Refusal::ImplementBeforeTests => ReasonWire {
-            code: "implement-before-tests".to_string(),
-            detail,
-            gate: None,
-            stages: Vec::new(),
-        },
-        Refusal::CommitBeforeGreenGate { gate } => ReasonWire {
+        Refusal::CommitBeforeGreenGate { gate, .. } => ReasonWire {
             code: "commit-before-green-gate".to_string(),
             detail,
             gate: gate.map(|verdict: Verdict| crate::derived::verdict_str(verdict).to_string()),
@@ -105,10 +95,7 @@ fn reason_wire(refusal: &Refusal) -> ReasonWire {
             code: "steer-pending".to_string(),
             detail,
             gate: None,
-            stages: stages
-                .iter()
-                .map(|stage: &StageId| stage.dir_name().to_string())
-                .collect(),
+            stages: stages.clone(),
         },
         _ => ReasonWire {
             code: "unknown".to_string(),

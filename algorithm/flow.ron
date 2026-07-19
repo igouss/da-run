@@ -1,0 +1,125 @@
+// flow.ron — the directory algorithm's pipeline, as data.
+//
+// The single source of truth for stage names, dirs, dispatch kinds, ordering
+// guards, and per-dispatch orchestration metadata. Consumed by:
+//   - da-state (Rust): loaded per run dir, validated by Flow::from_spec at
+//     load time — bad flow, no run.
+//   - bin/run / bin/workspace-lint (babashka) and workflows/*.js: via the
+//     validated JSON from `bin/state flow`.
+//
+// The machine's laws stay in code and are NOT configurable here: an
+// unanswered steer-request parks every dispatch, and the commit stage
+// demands a green gate verdict. What is data: which stages exist, their
+// order (dirs must be NN- prefixed in list order), which dispatch kinds run
+// against them, and which predecessor outputs each dispatch needs.
+//
+// role:
+//   Handoff(done_label) — produces output the next handoff consumes;
+//                          done_label is the run-state once it has output.
+//   Gate                — its artifact holds the mechanical verdict
+//                          (GATE GREEN / GATE RED); never a workflow.
+//   Commit             — its output is the commit record; green gate required.
+//
+// blocking rules refuse the dispatch (exit 4); advisory rules only warn.
+// model / strategy are orchestration hints for the workflow layer (ADR-0009
+// tiers); the run-state machine ignores them.
+Flow(
+    initial_label: "specced",
+    stages: [
+        Stage(
+            name: "design",
+            dir: "01-design",
+            role: Handoff(done_label: "designed"),
+            artifact: "design.md",
+            dispatches: [
+                Dispatch(kind: "design", model: "opus", effort: "high", strategy: "single"),
+                Dispatch(
+                    kind: "design-review",
+                    model: "opus",
+                    strategy: "review",
+                    advisory: [
+                        Needs(stage: "design", code: "design-review-without-design"),
+                    ],
+                ),
+            ],
+        ),
+        Stage(
+            name: "tests",
+            dir: "02-tests",
+            role: Handoff(done_label: "tested"),
+            artifact: "test-plan.md",
+            dispatches: [
+                Dispatch(
+                    kind: "tests",
+                    model: "sonnet",
+                    strategy: "single",
+                    blocking: [
+                        Needs(
+                            stage: "design",
+                            code: "tests-before-design",
+                            detail: "tests before stages/01-design/output/ has a design",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        Stage(
+            name: "implement",
+            dir: "03-implement",
+            role: Handoff(done_label: "implemented"),
+            dispatches: [
+                Dispatch(
+                    kind: "implement",
+                    model: "opus",
+                    effort: "high",
+                    strategy: "single",
+                    warn_on_red_gate: true,
+                    blocking: [
+                        Needs(
+                            stage: "tests",
+                            code: "implement-before-tests",
+                            detail: "implement before stages/02-tests/output/ has a test plan",
+                        ),
+                    ],
+                ),
+                Dispatch(
+                    kind: "implement-parallel-attempt",
+                    model: "opus",
+                    effort: "high",
+                    strategy: "parallel-attempts",
+                    warn_on_red_gate: true,
+                    blocking: [
+                        Needs(
+                            stage: "tests",
+                            code: "implement-before-tests",
+                            detail: "implement before stages/02-tests/output/ has a test plan",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        Stage(
+            name: "verify",
+            dir: "04-verify",
+            role: Gate,
+            artifact: "gate-report.md",
+            dispatches: [
+                Dispatch(
+                    kind: "verify",
+                    advisory: [
+                        Needs(stage: "implement", code: "verify-without-implementation"),
+                    ],
+                ),
+            ],
+        ),
+        Stage(
+            name: "commit",
+            dir: "05-commit",
+            role: Commit,
+            artifact: "commit.md",
+            dispatches: [
+                Dispatch(kind: "commit", model: "sonnet"),
+            ],
+        ),
+    ],
+)

@@ -1,5 +1,5 @@
+use crate::flow::{Flow, StageRef};
 use crate::phase::Phase;
-use crate::stage::StageId;
 use crate::verdict::Verdict;
 
 /// A run's identifier from `run.edn` `:run-id`. Never blank.
@@ -43,11 +43,14 @@ pub struct StageFacts {
 }
 
 impl StageFacts {
+    /// A stage with nothing observed — also the total-lookup fallback.
+    pub const EMPTY: StageFacts = StageFacts {
+        output_files: Vec::new(),
+        steer: None,
+    };
+
     pub fn empty() -> StageFacts {
-        StageFacts {
-            output_files: Vec::new(),
-            steer: None,
-        }
+        StageFacts::EMPTY
     }
 
     pub fn has_output(&self) -> bool {
@@ -59,35 +62,29 @@ impl StageFacts {
     }
 }
 
-/// Per-stage facts, total over [`StageId`] by construction.
+/// Per-stage facts, aligned with a [`Flow`]'s stage order and total by
+/// construction — a lookup never fails, a foreign ref reads as empty.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StageFactsMap {
-    design: StageFacts,
-    tests: StageFacts,
-    implement: StageFacts,
-    verify: StageFacts,
-    commit: StageFacts,
+    entries: Vec<StageFacts>,
 }
 
 impl StageFactsMap {
-    pub fn from_fn(mut facts_for: impl FnMut(StageId) -> StageFacts) -> StageFactsMap {
+    pub fn from_fn(
+        flow: &Flow,
+        mut facts_for: impl FnMut(StageRef) -> StageFacts,
+    ) -> StageFactsMap {
         StageFactsMap {
-            design: facts_for(StageId::Design),
-            tests: facts_for(StageId::Tests),
-            implement: facts_for(StageId::Implement),
-            verify: facts_for(StageId::Verify),
-            commit: facts_for(StageId::Commit),
+            entries: flow
+                .stages()
+                .map(|(stage, _): (StageRef, &crate::flow::StageDef)| facts_for(stage))
+                .collect(),
         }
     }
 
-    pub fn get(&self, id: StageId) -> &StageFacts {
-        match id {
-            StageId::Design => &self.design,
-            StageId::Tests => &self.tests,
-            StageId::Implement => &self.implement,
-            StageId::Verify => &self.verify,
-            StageId::Commit => &self.commit,
-        }
+    pub fn get(&self, stage: StageRef) -> &StageFacts {
+        static EMPTY: StageFacts = StageFacts::EMPTY;
+        self.entries.get(stage.index()).unwrap_or(&EMPTY)
     }
 }
 
@@ -96,10 +93,10 @@ impl StageFactsMap {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FsFacts {
     pub stages: StageFactsMap,
-    /// `None` when `gate-report.md` is absent or its verdict line is
+    /// `None` when the gate report is absent or its verdict line is
     /// unparseable — commit fails closed on `None`.
     pub gate: Option<Verdict>,
-    /// `stages/05-commit/output/` holds a commit record.
+    /// The commit stage's `output/` holds a commit record.
     pub commit_recorded: bool,
     pub phase: Phase,
     pub run_id: RunId,

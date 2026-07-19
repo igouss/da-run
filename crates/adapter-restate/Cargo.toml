@@ -8,6 +8,8 @@ description = "Ring 3: publishes the run mirror to the DaRun Restate object via 
 da-domain = { workspace = true }
 da-ports = { workspace = true }
 da-wire = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 
 [lints]

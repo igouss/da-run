@@ -34,6 +34,26 @@ type DerivedState = {
   anomalies: unknown[];
 };
 
+// One run artifact: a run-dir-relative path and its UTF-8 content. Artifacts
+// are the run's durable ephemera — run.edn, flow.ron, spec.md, and every
+// stage's output/ files — pushed by `da-state notify` after each change, so
+// the run can be restored on another host with `da-state restore`. The
+// worktree is never mirrored: code lives in the target project's git.
+type RunArtifact = {
+  path: string;
+  content: string;
+};
+
+type RunArtifacts = {
+  files: RunArtifact[];
+};
+
+// The restore payload: the last recorded state plus the artifact set.
+type RunSnapshot = {
+  state: DerivedState | null;
+  files: RunArtifact[];
+};
+
 const daRun = restate.object({
   name: "DaRun",
   handlers: {
@@ -44,9 +64,26 @@ const daRun = restate.object({
       ctx.set("state", derived);
     },
 
+    // Full-replace semantics: the run dir is canonical, the mirror follows.
+    // Each push carries the complete artifact set, so a file deleted on disk
+    // (an operator retracting an output) also disappears from the mirror.
+    recordArtifacts: async (
+      ctx: restate.ObjectContext,
+      batch: RunArtifacts
+    ): Promise<void> => {
+      ctx.set("artifacts", batch.files ?? []);
+    },
+
     getState: restate.handlers.object.shared(
       async (ctx: restate.ObjectSharedContext): Promise<DerivedState | null> =>
         (await ctx.get<DerivedState>("state")) ?? null
+    ),
+
+    getSnapshot: restate.handlers.object.shared(
+      async (ctx: restate.ObjectSharedContext): Promise<RunSnapshot> => ({
+        state: (await ctx.get<DerivedState>("state")) ?? null,
+        files: (await ctx.get<RunArtifact[]>("artifacts")) ?? [],
+      })
     ),
   },
 });

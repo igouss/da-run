@@ -1,5 +1,5 @@
 use crate::WIRE_VERSION;
-use da_domain::{Anomaly, Derived, Phase, RunId, RunState, StageId, Verdict};
+use da_domain::{Anomaly, Derived, Phase, RunId, Verdict};
 use serde::{Deserialize, Serialize};
 
 /// A run's derived state — the `derive` output and the mirror payload.
@@ -25,31 +25,15 @@ impl DerivedWire {
         DerivedWire {
             v: WIRE_VERSION,
             run_id: run_id.as_str().to_string(),
-            state: state_str(derived.state).to_string(),
+            state: derived.state.label(),
             phase: phase_str(derived.phase).to_string(),
-            parked: derived
-                .parked
-                .iter()
-                .map(|stage: &StageId| stage.dir_name().to_string())
-                .collect(),
+            parked: derived.parked.clone(),
             anomalies: derived
                 .anomalies
                 .iter()
                 .map(|anomaly: &Anomaly| anomaly_wire(anomaly))
                 .collect(),
         }
-    }
-}
-
-pub(crate) fn state_str(state: RunState) -> &'static str {
-    match state {
-        RunState::Specced => "specced",
-        RunState::Designed => "designed",
-        RunState::Tested => "tested",
-        RunState::Implemented => "implemented",
-        RunState::Gated(Verdict::Green) => "gated-green",
-        RunState::Gated(Verdict::Red) => "gated-red",
-        RunState::Committed => "committed",
     }
 }
 
@@ -71,8 +55,8 @@ fn anomaly_wire(anomaly: &Anomaly) -> AnomalyWire {
     match anomaly {
         Anomaly::LaterOutputWithoutEarlier { later, earlier } => AnomalyWire {
             code: "later-output-without-earlier".to_string(),
-            later: later.dir_name().to_string(),
-            earlier: earlier.dir_name().to_string(),
+            later: later.clone(),
+            earlier: earlier.clone(),
         },
         _ => AnomalyWire {
             code: "unknown".to_string(),

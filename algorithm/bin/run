@@ -12,6 +12,10 @@
 ;;       Assemble the immutable run record (manifest, result.patch, gate-report, traces)
 ;;       under <records-root>/experiments/<round>/runs/<run-id>/ (records-root =
 ;;       $DA_RECORDS, else ~/.local/share/da-run/records).
+;;   bin/run restore --run-id RUNID [--into DIR]
+;;       Rebuild a mirrored run on this machine: algorithm contracts from this repo,
+;;       run.edn/flow.ron/spec/stage outputs from the DaRun mirror (needs
+;;       DA_STEER_INGRESS). The worktree is NOT restored — instructions are printed.
 ;;   bin/run --selftest
 ;;
 ;; Provenance model: ADR-0006. code -> the project's git; ephemera -> the run dir;
@@ -107,7 +111,18 @@
 (defn records-root [] (or (System/getenv "DA_RECORDS")
                           (str (fs/home) "/.local/share/da-run/records")))
 
-(def algorithm-files ["CLAUDE.md" "CONTEXT.md" "references" "stages"])
+;; flow.ron is the pipeline definition (stages, dispatch kinds, ordering
+;; guards) — snapshotted with the run so every run dir is self-describing.
+(def algorithm-files ["CLAUDE.md" "CONTEXT.md" "flow.ron" "references" "stages"])
+
+(defn validate-flow!
+  "Fail-fast load-time validation: bin/state parses and validates flow.ron
+   (exit 0) or explains why not (exit 2). A bad flow never becomes a run."
+  [repo]
+  (let [r (sh (str repo "/bin/state") "flow" "--file" (str repo "/flow.ron"))]
+    (when-not (zero? (:exit r))
+      (throw (ex-info (str "flow.ron failed validation:\n"
+                           (:out r) (when (seq (:err r)) (str "\n" (:err r)))) {})))))
 
 ;; ---- setup ---------------------------------------------------------------
 
@@ -133,6 +148,7 @@
     (when-not (zero? (:exit status))
       (throw (ex-info (str "not a git repository (or git failed) at " project
                            (when (seq (:err status)) (str ": " (:err status)))) {})))
+    (validate-flow! repo)
     (when (working-tree-dirty? (:out status))
       (throw (ex-info (str "refusing to run — the target project has uncommitted changes.\n"
                            "Commit or stash them first: the worktree branches from HEAD, so "
@@ -209,6 +225,38 @@
                               (str "no Claude session found at " session-dir
                                    " — attach traces manually"))}))))
 
+;; ---- restore -------------------------------------------------------------
+
+(defn restore [{:keys [run-id into]}]
+  (when-not run-id (throw (ex-info "restore needs --run-id RUNID" {})))
+  (let [repo    (repo-root)
+        run-root (or (System/getenv "DA_RUN_ROOT")
+                     (str (fs/home) "/.cache/directory-algorithm/runs"))
+        run-dir (str (or into (str run-root "/" run-id)))]
+    (when (fs/exists? (str run-dir "/run.edn"))
+      (throw (ex-info (str run-dir " already holds a run — refusing to overwrite") {})))
+    ;; The factory's contracts first (CLAUDE.md, CONTEXT.md, references, stages, flow.ron),
+    ;; then the mirror overlay wins: run.edn, the run's own flow.ron, spec.md, outputs.
+    (fs/create-dirs run-dir)
+    (doseq [f algorithm-files]
+      (let [src (str repo "/" f), dst (str run-dir "/" f)]
+        (if (fs/directory? src)
+          (fs/copy-tree src dst {:replace-existing true})
+          (fs/copy src dst {:replace-existing true}))))
+    (let [r (sh (str repo "/bin/state") "restore" "--run-id" run-id "--into" run-dir)]
+      (when-not (zero? (:exit r))
+        (throw (ex-info (str "state restore failed:\n" (:out r)
+                             (when (seq (:err r)) (str "\n" (:err r)))) {}))))
+    (let [cfg (edn/read-string (slurp (str run-dir "/run.edn")))]
+      (println (json/generate-string
+                {:run-id run-id :run-dir run-dir
+                 :next ["the worktree is not mirrored — recreate it from the target project's git:"
+                        (str "  git -C " (:project cfg) " worktree add " run-dir "/worktree " (:branch cfg))
+                        (str "  (branch absent on this machine? start it from the base commit: git -C "
+                             (:project cfg) " worktree add -b " (:branch cfg) " " run-dir "/worktree "
+                             (:base-commit cfg) ")")
+                        (str "status any time: bin/state status --run " run-dir " --pretty")]})))))
+
 ;; ---- dispatch ------------------------------------------------------------
 
 (try
@@ -217,9 +265,11 @@
       "selftest" (selftest)
       "setup"    (setup flags)
       "capture"  (capture flags)
+      "restore"  (restore flags)
       (do (binding [*out* *err*]
             (println "usage: bin/run setup --project P --spec S [--arm folder] [--round R]")
             (println "       bin/run capture --run RUNDIR [--round R]")
+            (println "       bin/run restore --run-id RUNID [--into DIR]")
             (println "       bin/run --selftest"))
           (System/exit 2))))
   (catch clojure.lang.ExceptionInfo e

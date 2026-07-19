@@ -18,6 +18,8 @@ gate going green and the commit written.
 directory-algorithm/        (the factory — you generate a run instance from it)
 ├── CLAUDE.md               (L0 — you are here)
 ├── CONTEXT.md              (L1 — task routing; start there)
+├── flow.ron                (the pipeline as data: stages, dirs, dispatch kinds, guards —
+│                            validated at load time; `bin/state flow` prints it as JSON)
 ├── references/             (L3 — the house standards; internalise as constraints)
 │   ├── architecture.md     hexagonal / ECB, functional core
 │   ├── testing.md          Gherkin, property/unit, zero-one-many

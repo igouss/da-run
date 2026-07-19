@@ -1,22 +1,23 @@
 export const meta = {
   name: 'da-arm-pre',
-  description: 'Drive the design/tests/implement subsequence of one directory-algorithm arm from a stage list — fixed (System A) or generated (System A prime) — up to but not including the mechanical gate.',
-  whenToUse: 'Called by bin/run-arm-wf with the fixed three-stage list, or by da-dynamic-arm.js with a plan-generated list. Never call with a stage list that includes verify/commit — those are hard invariants driven outside this script (ADR-0028).',
+  description: 'Drive the pre-gate handoff subsequence of one directory-algorithm arm from a stage list — fixed (System A) or generated (System A prime) — up to but not including the mechanical gate.',
+  whenToUse: 'Called by da-stage.js (or bin/run-arm-wf) with a stage list enriched from the flow. Never call with a stage list that includes the gate or commit stages — those are hard invariants driven outside this script (ADR-0028).',
   phases: [
-    { title: 'design', detail: 'derive or review the ECB design' },
-    { title: 'tests', detail: 'red tests from the design' },
-    { title: 'implement', detail: 'one clean attempt, or N judged parallel attempts' },
+    { title: 'Stages', detail: 'each handoff stage in list order, on its flow-configured model and strategy' },
   ],
 }
 
 // args:
 //   runDir, worktree      absolute paths (worktree = runDir + '/worktree')
-//   stageList             array of {kind, model, attempts?}. kind in:
-//                          'design' | 'design-review' | 'tests' |
-//                          'implement' | 'implement-parallel-attempt'
+//   stageList             array of {kind, model, strategy, dir, artifact, prior, attempts?, effort?}
+//                          — every field resolved by the CALLER from the run's flow.ron
+//                          (via `bin/state flow`). strategy in:
+//                          'single' | 'review' | 'parallel-attempts'
+//                          prior = earlier handoff stages as {dir, artifact}, pipeline order.
 //   The list is DATA, never re-derived by this script — System A's caller supplies the fixed
-//   three-entry list every round; System A prime's caller supplies whatever da-dynamic-arm's
-//   Plan phase returned. This script only ever executes what it is given.
+//   list every round; System A prime's caller supplies whatever da-dynamic-arm's Plan phase
+//   returned. This script only ever executes what it is given: no stage name, dir, or model
+//   lives here.
 
 const STAGE_SCHEMA = {
   type: 'object',
@@ -79,35 +80,38 @@ function stagePrompt(runDir, stageDir) {
   )
 }
 
-function designPrompt(runDir, review) {
-  const base = stagePrompt(runDir, '01-design')
-  if (!review) return base
+function reviewPrompt(runDir, spec) {
   return (
-    base +
-    `\n\nThis is a REVIEW pass: a design already exists at ` +
-    `${runDir}/stages/01-design/output/design.md. Re-read it against your contract; revise it in ` +
-    `place where the Audit finds a gap, leave it unchanged where it already passes — then re-run ` +
-    `the Audit on the final file.`
+    stagePrompt(runDir, spec.dir) +
+    `\n\nThis is a REVIEW pass: this stage's output already exists at ` +
+    `${runDir}/stages/${spec.dir}/output/${spec.artifact}. Re-read it against your contract; ` +
+    `revise it in place where the Audit finds a gap, leave it unchanged where it already ` +
+    `passes — then re-run the Audit on the final file.`
   )
 }
 
-function testsPrompt(runDir) {
-  return stagePrompt(runDir, '02-tests')
+// The parallel-attempts strategy references the earlier handoffs by position:
+// the first prior stage holds the design, the last prior stage holds the tests.
+function designOf(spec) {
+  return spec.prior[0]
 }
 
-function implementPrompt(runDir) {
-  return stagePrompt(runDir, '03-implement')
+function testsOf(spec) {
+  return spec.prior[spec.prior.length - 1]
 }
 
-function attemptPrompt(runDir, index) {
+function attemptPrompt(runDir, spec, index) {
+  const design = designOf(spec)
+  const tests = testsOf(spec)
   return (
-    `Stage 03 — implement, ATTEMPT ${index}, one of several independent parallel attempts that ` +
+    `Stage ${spec.dir}, ATTEMPT ${index}, one of several independent parallel attempts that ` +
     `will be judged. Create your own throwaway git worktree off the SAME base commit as ` +
     `${runDir}/worktree (read the base commit from ${runDir}/run.edn): \n` +
     `  git -C <the target project repo, same repo as ${runDir}/worktree> worktree add ` +
     `/tmp/da-attempt-${index} <base-commit>\n` +
-    `Implement the change there per the design at ${runDir}/stages/01-design/output/design.md ` +
-    `and the tests at ${runDir}/stages/02-tests (copy the stage-02 test files into your attempt ` +
+    `Implement the change there per the design at ` +
+    `${runDir}/stages/${design.dir}/output/${design.artifact} and the tests at ` +
+    `${runDir}/stages/${tests.dir} (copy that stage's test files into your attempt ` +
     `worktree first, from ${runDir}/worktree). Run them; report testsPass honestly. Output the ` +
     `unified diff of your attempt against the base commit as \`patch\` — do NOT touch ` +
     `${runDir}/worktree itself, another attempt or the judge may still be using it. Before ` +
@@ -116,63 +120,66 @@ function attemptPrompt(runDir, index) {
   )
 }
 
-function judgePrompt(runDir, attempts) {
+function judgePrompt(runDir, spec, attempts) {
+  const design = designOf(spec)
+  const tests = testsOf(spec)
   const body = attempts
     .map((a, i) => `--- ATTEMPT ${i} (testsPass=${a.testsPass}) ---\n${a.selfAssessment}\n\nPATCH:\n${a.patch}\n`)
     .join('\n')
   return (
     `${attempts.length} independent implementation attempts were made for the same design and ` +
-    `tests (design at ${runDir}/stages/01-design/output/design.md, tests at ` +
-    `${runDir}/stages/02-tests/output/test-plan.md). Judge them against the design's requirement ` +
-    `ledger, the tests, and the house standards at ${runDir}/references/rust-standards.md. Reject ` +
-    `any attempt whose testsPass is false unless every attempt failed. Pick exactly one winner by ` +
-    `index (0-based).\n\n${body}`
+    `tests (design at ${runDir}/stages/${design.dir}/output/${design.artifact}, tests at ` +
+    `${runDir}/stages/${tests.dir}/output/${tests.artifact}). Judge them against the design's ` +
+    `requirement ledger, the tests, and the house standards at ` +
+    `${runDir}/references/rust-standards.md. Reject any attempt whose testsPass is false unless ` +
+    `every attempt failed. Pick exactly one winner by index (0-based).\n\n${body}`
   )
 }
 
-function applyWinnerPrompt(runDir, winnerPatch) {
+function applyWinnerPrompt(runDir, spec, winnerPatch) {
+  const tests = testsOf(spec)
   return (
     `Apply exactly this patch to ${runDir}/worktree (the real, shared worktree — nothing else has ` +
     `touched it):\n\n${winnerPatch}\n\nUse \`git -C ${runDir}/worktree apply\`; if it fails to ` +
     `apply cleanly because of path drift, re-create the equivalent change by hand from the patch's ` +
-    `intent rather than giving up. Then re-run the stage-02 tests in the worktree and confirm ` +
-    `green. Write ${runDir}/stages/03-implement/output/completeness.md and change-note.md exactly ` +
-    `as stage 03's contract (${runDir}/stages/03-implement/CONTEXT.md) requires.`
+    `intent rather than giving up. Then re-run the ${tests.dir} tests in the worktree and confirm ` +
+    `green. Write this stage's output files exactly as its contract ` +
+    `(${runDir}/stages/${spec.dir}/CONTEXT.md) requires.`
   )
 }
 
+function agentOpts(spec, label, schema) {
+  const opts = { label, model: spec.model, schema }
+  if (spec.effort) opts.effort = spec.effort
+  return opts
+}
+
 async function runStage(spec) {
-  if (spec.kind === 'design') {
-    return agent(designPrompt(args.runDir, false), { label: 'design', model: spec.model || 'opus', effort: 'high', schema: STAGE_SCHEMA })
+  if (spec.strategy === 'single') {
+    return agent(stagePrompt(args.runDir, spec.dir), agentOpts(spec, spec.kind, STAGE_SCHEMA))
   }
-  if (spec.kind === 'design-review') {
-    return agent(designPrompt(args.runDir, true), { label: 'design-review', model: spec.model || 'opus', schema: STAGE_SCHEMA })
+  if (spec.strategy === 'review') {
+    return agent(reviewPrompt(args.runDir, spec), agentOpts(spec, spec.kind, STAGE_SCHEMA))
   }
-  if (spec.kind === 'tests') {
-    return agent(testsPrompt(args.runDir), { label: 'tests', model: spec.model || 'sonnet', schema: STAGE_SCHEMA })
-  }
-  if (spec.kind === 'implement') {
-    return agent(implementPrompt(args.runDir), { label: 'implement', model: spec.model || 'opus', effort: 'high', schema: STAGE_SCHEMA })
-  }
-  if (spec.kind === 'implement-parallel-attempt') {
+  if (spec.strategy === 'parallel-attempts') {
     const n = Math.max(2, Math.min(4, spec.attempts || 3))
-    phase('implement (parallel attempts)')
+    phase(`${spec.kind} (parallel attempts)`)
     const attempts = (
       await parallel(
         Array.from({ length: n }, (_, i) => () =>
-          agent(attemptPrompt(args.runDir, i), { label: `attempt-${i}`, model: spec.model || 'opus', effort: 'high', schema: ATTEMPT_SCHEMA }).catch(() => null)
+          agent(attemptPrompt(args.runDir, spec, i), agentOpts(spec, `attempt-${i}`, ATTEMPT_SCHEMA)).catch(() => null)
         )
       )
     ).filter(Boolean)
     if (attempts.length === 0) throw new Error('all parallel implementation attempts errored')
-    const judged = await agent(judgePrompt(args.runDir, attempts), { label: 'judge-attempts', model: 'opus', effort: 'high', schema: JUDGE_SCHEMA })
+    const judged = await agent(judgePrompt(args.runDir, spec, attempts), agentOpts(spec, 'judge-attempts', JUDGE_SCHEMA))
     const winner = attempts[Math.max(0, Math.min(attempts.length - 1, judged.winnerIndex))]
-    log(`implement: ${attempts.length} attempt(s) judged, winner=${judged.winnerIndex} (${judged.rationale})`)
-    const applied = await agent(applyWinnerPrompt(args.runDir, winner.patch), { label: 'apply-winner', model: spec.model || 'opus', schema: APPLY_SCHEMA })
+    log(`${spec.kind}: ${attempts.length} attempt(s) judged, winner=${judged.winnerIndex} (${judged.rationale})`)
+    const applied = await agent(applyWinnerPrompt(args.runDir, spec, winner.patch), agentOpts(spec, 'apply-winner', APPLY_SCHEMA))
     if (!applied.applied) throw new Error('winning attempt failed to apply to the shared worktree')
-    return { auditPassed: !!applied.testsPassAfterApply, filesWritten: ['completeness.md', 'change-note.md'], summary: `judged winner ${judged.winnerIndex}/${attempts.length}` }
+    return { auditPassed: !!applied.testsPassAfterApply, filesWritten: [], summary: `judged winner ${judged.winnerIndex}/${attempts.length}` }
   }
-  throw new Error(`unknown stage kind: ${spec.kind}`)
+  throw new Error(`unknown stage strategy: ${spec.strategy} (kind: ${spec.kind})`)
 }
 
 const results = []

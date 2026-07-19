@@ -7,6 +7,9 @@ description = "Ring 3: reads a run dir into FsFacts"
 [dependencies]
 da-domain = { workspace = true }
 da-ports = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

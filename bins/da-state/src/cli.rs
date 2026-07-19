@@ -1,5 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
-use da_domain::Dispatch;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -25,43 +24,37 @@ pub enum Command {
         run_dir: PathBuf,
     },
     /// Decide a dispatch: exit 0 allowed, 3 steer pending, 4 ordering violation.
+    /// Dispatch kinds come from the run's flow.ron — unknown kinds are exit 2.
     Check {
         #[arg(long = "run")]
         run_dir: PathBuf,
-        dispatch: DispatchArg,
+        dispatch: String,
     },
-    /// Publish the derived state to the DaRun mirror (needs DA_STEER_INGRESS).
+    /// Publish the derived state AND the run's artifacts to the DaRun mirror
+    /// (needs DA_STEER_INGRESS) — after this the run is restorable elsewhere.
     Notify {
         #[arg(long = "run")]
         run_dir: PathBuf,
     },
+    /// Materialize a mirrored run's artifacts into a directory — the
+    /// restart-on-another-host path (needs DA_STEER_INGRESS). The worktree is
+    /// not restored: recreate it from run.edn's project/branch/base-commit.
+    Restore {
+        #[arg(long = "run-id")]
+        run_id: String,
+        #[arg(long = "into")]
+        into: PathBuf,
+    },
+    /// Load, validate, and print a flow definition as JSON — the bridge for
+    /// consumers that cannot parse RON (bb scripts, workflow JS).
+    Flow {
+        /// A run dir holding flow.ron.
+        #[arg(long = "run", conflicts_with = "file")]
+        run_dir: Option<PathBuf>,
+        /// A flow.ron path directly (pre-run validation).
+        #[arg(long = "file")]
+        file: Option<PathBuf>,
+    },
     /// Embedded smoke test over a scratch run dir.
     Selftest,
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-pub enum DispatchArg {
-    Design,
-    DesignReview,
-    Tests,
-    Implement,
-    /// Same rules as implement — the attempt count is da-stage.js's concern.
-    ImplementParallelAttempt,
-    Verify,
-    Commit,
-}
-
-impl DispatchArg {
-    pub fn to_dispatch(self) -> Dispatch {
-        match self {
-            DispatchArg::Design => Dispatch::Design,
-            DispatchArg::DesignReview => Dispatch::DesignReview,
-            DispatchArg::Tests => Dispatch::Tests,
-            DispatchArg::Implement | DispatchArg::ImplementParallelAttempt => Dispatch::Implement {
-                parallel_attempts: None,
-            },
-            DispatchArg::Verify => Dispatch::Verify,
-            DispatchArg::Commit => Dispatch::Commit,
-        }
-    }
 }

@@ -6,5 +6,5 @@ mod mirror;
 mod status;
 
 pub use check_dispatch::{Decision, check_dispatch};
-pub use mirror::{PublishError, Published, publish_mirror};
+pub use mirror::{PublishError, Published, RestoreError, Restored, publish_mirror, restore_run};
 pub use status::{StageStatus, StatusReport, status};

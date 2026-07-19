@@ -9,6 +9,7 @@
 
 (require '[clojure.string :as str]
          '[babashka.fs :as fs]
+         '[babashka.process :as p]
          '[cheshire.core :as json])
 
 ;; ---- pure core -----------------------------------------------------------
@@ -51,6 +52,19 @@
     {:kind "FORWARD-REF" :path path
      :detail (str "stage " self " references later stage " target)}))
 
+(defn flow-mismatches
+  "stages/ on disk must hold exactly the dirs flow.ron declares — the flow
+   is the single source of truth, the dirs its projection."
+  [flow-dirs actual-dirs]
+  (let [flow (set flow-dirs) actual (set actual-dirs)]
+    (concat
+     (for [d (sort (remove actual flow))]
+       {:kind "FLOW-DIR-MISSING" :path (str "stages/" d)
+        :detail "declared in flow.ron but absent on disk"})
+     (for [d (sort (remove flow actual))]
+       {:kind "FLOW-DIR-UNKNOWN" :path (str "stages/" d)
+        :detail "on disk but not declared in flow.ron"}))))
+
 (defn committed-outputs
   "outputs: seq of {:stage path :extra [non-.gitkeep filenames]}"
   [outputs]
@@ -62,12 +76,13 @@
 
 (defn lint
   "Pure: assemble all violations from already-read inputs."
-  [{:keys [context-files reference-files stage-files outputs]}]
+  [{:keys [context-files reference-files stage-files outputs flow-dirs stage-dirs]}]
   (vec (concat (too-long context-max context-files)
                (too-long reference-max reference-files)
                (missing-sections stage-files)
                (forward-refs stage-files)
-               (committed-outputs outputs))))
+               (committed-outputs outputs)
+               (flow-mismatches flow-dirs stage-dirs))))
 
 ;; ---- selftest ------------------------------------------------------------
 
@@ -83,9 +98,26 @@
   (assert (= 1 (count (forward-refs [{:path "stages/02-tests/CONTEXT.md" :content "read ../03-implement/output/"}]))))
   (assert (= 1 (count (committed-outputs [{:stage "s/output" :extra ["design.md"]}]))))
   (assert (empty? (committed-outputs [{:stage "s/output" :extra []}])))
+  (assert (empty? (flow-mismatches ["01-design"] ["01-design"])))          ; zero mismatches
+  (assert (= 1 (count (flow-mismatches ["01-design" "02-tests"] ["01-design"])))) ; one missing
+  (assert (= "FLOW-DIR-UNKNOWN"                                            ; one unknown
+             (:kind (first (flow-mismatches ["01-design"] ["01-design" "09-extra"])))))
+  (assert (= 4 (count (flow-mismatches ["01-a" "02-b"] ["03-c" "04-d"])))) ; many (2 missing + 2 unknown)
   (println (json/generate-string {:selftest "ok"})))
 
 ;; ---- imperative shell ----------------------------------------------------
+
+(defn script-bin [] (-> *file* fs/absolutize fs/normalize fs/parent str))
+
+(defn flow-dirs
+  "Stage dirs from flow.ron via `state flow` — the flow subcommand validates
+   the file (load-time validation) and emits the pipeline as JSON."
+  [root]
+  (let [r (p/sh (str (script-bin) "/state") "flow" "--file" (str root "/flow.ron"))]
+    (when-not (zero? (:exit r))
+      (binding [*out* *err*] (println "error: flow.ron failed validation:" (str/trim (:out r))))
+      (System/exit 2))
+    (mapv :dir (:stages (json/parse-string (:out r) true)))))
 
 (defn gather [root]
   (let [rootp (fs/path root)
@@ -106,7 +138,13 @@
     {:context-files (vec context)
      :reference-files (vec refs)
      :stage-files (vec stages)
-     :outputs (vec outputs)}))
+     :outputs (vec outputs)
+     :flow-dirs (flow-dirs root)
+     :stage-dirs (->> (fs/list-dir (fs/path rootp "stages"))
+                      (filter fs/directory?)
+                      (map (comp str fs/file-name))
+                      sort
+                      vec)}))
 
 (defn repo-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
 

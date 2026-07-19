@@ -5,199 +5,235 @@
 
 mod common;
 
-use common::{fresh_facts, implemented_facts, with_output, with_steer};
-use da_domain::{
-    Anomaly, Dispatch, FsFacts, Refusal, RunState, StageId, Verdict, Warning, check, derive,
-};
+use common::{dispatch_ref, fresh_facts, implemented_facts, test_flow, with_output, with_steer};
+use da_domain::{Anomaly, Flow, FsFacts, Refusal, RunState, Verdict, Warning, check, derive};
 
 // Scenario: a fresh run holds only the spec
 #[test]
 fn fresh_run_is_specced() {
-    let facts: FsFacts = fresh_facts();
-    assert_eq!(derive(&facts).state, RunState::Specced);
+    let flow: Flow = test_flow();
+    let facts: FsFacts = fresh_facts(&flow);
+    assert_eq!(
+        derive(&flow, &facts).state,
+        RunState::Pending {
+            label: "specced".to_string()
+        }
+    );
 }
 
 #[test]
 fn fresh_run_refuses_tests() {
-    let facts: FsFacts = fresh_facts();
+    let flow: Flow = test_flow();
+    let facts: FsFacts = fresh_facts(&flow);
     assert_eq!(
-        check(&facts, &Dispatch::Tests),
-        Err(Refusal::TestsBeforeDesign)
+        check(&flow, &facts, dispatch_ref(&flow, "tests")),
+        Err(Refusal::OrderingViolation {
+            code: "tests-before-design".to_string(),
+            detail: "tests before stages/01-design/output/ has a design".to_string(),
+        })
     );
 }
 
 #[test]
 fn fresh_run_refuses_implement() {
-    let facts: FsFacts = fresh_facts();
+    let flow: Flow = test_flow();
+    let facts: FsFacts = fresh_facts(&flow);
     assert_eq!(
-        check(
-            &facts,
-            &Dispatch::Implement {
-                parallel_attempts: None
-            }
-        ),
-        Err(Refusal::ImplementBeforeTests)
+        check(&flow, &facts, dispatch_ref(&flow, "implement")),
+        Err(Refusal::OrderingViolation {
+            code: "implement-before-tests".to_string(),
+            detail: "implement before stages/02-tests/output/ has a test plan".to_string(),
+        })
     );
 }
 
 #[test]
 fn fresh_run_warns_on_design_review() {
-    let facts: FsFacts = fresh_facts();
-    let warnings: Vec<Warning> = check(&facts, &Dispatch::DesignReview).unwrap().warnings;
-    assert_eq!(warnings, vec![Warning::DesignReviewWithoutDesign]);
+    let flow: Flow = test_flow();
+    let facts: FsFacts = fresh_facts(&flow);
+    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "design-review"))
+        .unwrap()
+        .warnings;
+    assert_eq!(
+        warnings,
+        vec![Warning::Advisory {
+            code: "design-review-without-design".to_string()
+        }]
+    );
 }
 
 // Scenario: one design file unlocks tests
 #[test]
 fn one_design_file_is_designed() {
-    let facts: FsFacts = with_output(&fresh_facts(), StageId::Design, "design.md");
-    assert_eq!(derive(&facts).state, RunState::Designed);
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "design", "design.md");
+    assert_eq!(
+        derive(&flow, &facts).state,
+        RunState::HandoffDone {
+            label: "designed".to_string(),
+            rank: 1
+        }
+    );
 }
 
 #[test]
 fn one_design_file_allows_tests() {
-    let facts: FsFacts = with_output(&fresh_facts(), StageId::Design, "design.md");
-    assert!(check(&facts, &Dispatch::Tests).is_ok());
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "design", "design.md");
+    assert!(check(&flow, &facts, dispatch_ref(&flow, "tests")).is_ok());
 }
 
 // Scenario: a green gate allows commit
 #[test]
 fn green_gate_is_gated_green() {
-    let mut facts: FsFacts = implemented_facts();
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Green);
-    assert_eq!(derive(&facts).state, RunState::Gated(Verdict::Green));
+    assert_eq!(derive(&flow, &facts).state, RunState::Gated(Verdict::Green));
 }
 
 #[test]
 fn green_gate_allows_commit() {
-    let mut facts: FsFacts = implemented_facts();
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Green);
-    assert!(check(&facts, &Dispatch::Commit).is_ok());
+    assert!(check(&flow, &facts, dispatch_ref(&flow, "commit")).is_ok());
 }
 
 // Scenario: a red gate refuses commit but allows rework
 #[test]
 fn red_gate_refuses_commit_with_typed_reason() {
-    let mut facts: FsFacts = implemented_facts();
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Red);
     assert_eq!(
-        check(&facts, &Dispatch::Commit),
+        check(&flow, &facts, dispatch_ref(&flow, "commit")),
         Err(Refusal::CommitBeforeGreenGate {
-            gate: Some(Verdict::Red)
+            gate: Some(Verdict::Red),
+            gate_report: "stages/04-verify/output/gate-report.md".to_string(),
         })
     );
 }
 
 #[test]
 fn red_gate_allows_implement_rework_with_warning() {
-    let mut facts: FsFacts = implemented_facts();
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Red);
-    let warnings: Vec<Warning> = check(
-        &facts,
-        &Dispatch::Implement {
-            parallel_attempts: None,
-        },
-    )
-    .unwrap()
-    .warnings;
+    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "implement"))
+        .unwrap()
+        .warnings;
     assert!(warnings.contains(&Warning::RedGateRework));
 }
 
 // Scenario: an absent gate report fails closed
 #[test]
 fn absent_gate_report_refuses_commit() {
-    let facts: FsFacts = implemented_facts();
+    let flow: Flow = test_flow();
+    let facts: FsFacts = implemented_facts(&flow);
     assert_eq!(
-        check(&facts, &Dispatch::Commit),
-        Err(Refusal::CommitBeforeGreenGate { gate: None })
+        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        Err(Refusal::CommitBeforeGreenGate {
+            gate: None,
+            gate_report: "stages/04-verify/output/gate-report.md".to_string(),
+        })
     );
 }
 
 // Scenario: an unanswered steer parks the run
 #[test]
 fn unanswered_steer_parks_the_stage() {
-    let facts: FsFacts = with_steer(&fresh_facts(), StageId::Tests, false);
-    assert_eq!(derive(&facts).parked, vec![StageId::Tests]);
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_steer(&flow, &fresh_facts(&flow), "tests", false);
+    assert_eq!(derive(&flow, &facts).parked, vec!["02-tests".to_string()]);
 }
 
 #[test]
 fn unanswered_steer_refuses_design_too() {
-    let facts: FsFacts = with_steer(&fresh_facts(), StageId::Tests, false);
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_steer(&flow, &fresh_facts(&flow), "tests", false);
     assert_eq!(
-        check(&facts, &Dispatch::Design),
+        check(&flow, &facts, dispatch_ref(&flow, "design")),
         Err(Refusal::SteerPending {
-            stages: vec![StageId::Tests]
+            stages: vec!["02-tests".to_string()]
         })
     );
 }
 
 #[test]
 fn answered_steer_clears_the_park() {
-    let facts: FsFacts = with_steer(&fresh_facts(), StageId::Tests, true);
-    assert_eq!(derive(&facts).parked, Vec::<StageId>::new());
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_steer(&flow, &fresh_facts(&flow), "tests", true);
+    assert_eq!(derive(&flow, &facts).parked, Vec::<String>::new());
 }
 
 // Scenario: zero, one, many pending steers (two counts as many)
 #[test]
 fn zero_steers_parks_nothing() {
-    let facts: FsFacts = fresh_facts();
-    assert_eq!(derive(&facts).parked, Vec::<StageId>::new());
+    let flow: Flow = test_flow();
+    let facts: FsFacts = fresh_facts(&flow);
+    assert_eq!(derive(&flow, &facts).parked, Vec::<String>::new());
 }
 
 #[test]
 fn many_steers_park_in_pipeline_order() {
-    let one: FsFacts = with_steer(&fresh_facts(), StageId::Implement, false);
-    let many: FsFacts = with_steer(&one, StageId::Design, false);
+    let flow: Flow = test_flow();
+    let one: FsFacts = with_steer(&flow, &fresh_facts(&flow), "implement", false);
+    let many: FsFacts = with_steer(&flow, &one, "design", false);
     assert_eq!(
-        derive(&many).parked,
-        vec![StageId::Design, StageId::Implement]
+        derive(&flow, &many).parked,
+        vec!["01-design".to_string(), "03-implement".to_string()]
     );
 }
 
 // Scenario: implementation without tests is an anomaly and still refused
 #[test]
 fn implement_output_without_tests_is_an_anomaly() {
-    let facts: FsFacts = with_output(&fresh_facts(), StageId::Implement, "notes.md");
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "implement", "notes.md");
     assert_eq!(
-        derive(&facts).anomalies,
+        derive(&flow, &facts).anomalies,
         vec![Anomaly::LaterOutputWithoutEarlier {
-            later: StageId::Implement,
-            earlier: StageId::Tests
+            later: "03-implement".to_string(),
+            earlier: "02-tests".to_string(),
         }]
     );
 }
 
 #[test]
 fn implement_output_without_tests_still_refuses_implement() {
-    let facts: FsFacts = with_output(&fresh_facts(), StageId::Implement, "notes.md");
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "implement", "notes.md");
     assert_eq!(
-        check(
-            &facts,
-            &Dispatch::Implement {
-                parallel_attempts: None
-            }
-        ),
-        Err(Refusal::ImplementBeforeTests)
+        check(&flow, &facts, dispatch_ref(&flow, "implement")),
+        Err(Refusal::OrderingViolation {
+            code: "implement-before-tests".to_string(),
+            detail: "implement before stages/02-tests/output/ has a test plan".to_string(),
+        })
     );
 }
 
 // Scenario: a commit record completes the run
 #[test]
 fn commit_record_is_committed() {
-    let mut facts: FsFacts = implemented_facts();
+    let flow: Flow = test_flow();
+    let mut facts: FsFacts = implemented_facts(&flow);
     facts.commit_recorded = true;
-    assert_eq!(derive(&facts).state, RunState::Committed);
+    assert_eq!(derive(&flow, &facts).state, RunState::Committed);
 }
 
 // Scenario: steady-state re-dispatch warns, never refuses
 #[test]
 fn steady_state_redispatch_of_complete_stage_warns() {
-    let facts: FsFacts = with_output(&fresh_facts(), StageId::Design, "design.md");
-    let warnings: Vec<Warning> = check(&facts, &Dispatch::Design).unwrap().warnings;
+    let flow: Flow = test_flow();
+    let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "design", "design.md");
+    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "design"))
+        .unwrap()
+        .warnings;
     assert_eq!(
         warnings,
         vec![Warning::StageAlreadyComplete {
-            stage: StageId::Design
+            stage: "01-design".to_string()
         }]
     );
 }
@@ -205,7 +241,15 @@ fn steady_state_redispatch_of_complete_stage_warns() {
 // Scenario: verify may always run, warning over an empty implementation
 #[test]
 fn verify_on_empty_implementation_warns() {
-    let facts: FsFacts = fresh_facts();
-    let warnings: Vec<Warning> = check(&facts, &Dispatch::Verify).unwrap().warnings;
-    assert_eq!(warnings, vec![Warning::VerifyWithoutImplementation]);
+    let flow: Flow = test_flow();
+    let facts: FsFacts = fresh_facts(&flow);
+    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "verify"))
+        .unwrap()
+        .warnings;
+    assert_eq!(
+        warnings,
+        vec![Warning::Advisory {
+            code: "verify-without-implementation".to_string()
+        }]
+    );
 }

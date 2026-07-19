@@ -43,7 +43,7 @@ impl StatusWire {
                 .stages
                 .iter()
                 .map(|stage: &StageStatus| StageWire {
-                    stage: stage.stage.dir_name().to_string(),
+                    stage: stage.stage.clone(),
                     complete: stage.complete,
                     files: stage.files.clone(),
                     steer_pending: stage.steer_pending,

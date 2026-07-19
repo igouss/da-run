@@ -3,19 +3,17 @@
 
 #![allow(clippy::unwrap_used)]
 
-use da_domain::{
-    Allowed, Anomaly, Derived, Phase, Refusal, RunId, RunState, StageId, Verdict, Warning,
-};
+use da_domain::{Allowed, Anomaly, Derived, Phase, Refusal, RunId, RunState, Verdict, Warning};
 use da_wire::{CheckWire, DerivedWire};
 
 fn sample_derived() -> Derived {
     Derived {
         state: RunState::Gated(Verdict::Red),
-        parked: vec![StageId::Tests],
+        parked: vec!["02-tests".to_string()],
         phase: Phase::Convergence,
         anomalies: vec![Anomaly::LaterOutputWithoutEarlier {
-            later: StageId::Implement,
-            earlier: StageId::Tests,
+            later: "03-implement".to_string(),
+            earlier: "02-tests".to_string(),
         }],
     }
 }
@@ -31,7 +29,7 @@ fn derived_wire_shape_is_pinned() {
 fn check_allowed_shape_is_pinned() {
     let allowed: Allowed = Allowed {
         warnings: vec![Warning::StageAlreadyComplete {
-            stage: StageId::Design,
+            stage: "01-design".to_string(),
         }],
     };
     insta::assert_json_snapshot!(CheckWire::allowed(&allowed));
@@ -40,7 +38,7 @@ fn check_allowed_shape_is_pinned() {
 #[test]
 fn check_refused_steer_shape_is_pinned() {
     let refusal: Refusal = Refusal::SteerPending {
-        stages: vec![StageId::Tests, StageId::Implement],
+        stages: vec!["02-tests".to_string(), "03-implement".to_string()],
     };
     insta::assert_json_snapshot!(CheckWire::refused(&refusal));
 }
@@ -49,6 +47,7 @@ fn check_refused_steer_shape_is_pinned() {
 fn check_refused_gate_shape_is_pinned() {
     let refusal: Refusal = Refusal::CommitBeforeGreenGate {
         gate: Some(Verdict::Red),
+        gate_report: "stages/04-verify/output/gate-report.md".to_string(),
     };
     insta::assert_json_snapshot!(CheckWire::refused(&refusal));
 }

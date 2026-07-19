@@ -1,4 +1,4 @@
-use da_domain::{Allowed, Dispatch, FsFacts, Refusal, check};
+use da_domain::{Allowed, DispatchRef, Flow, FsFacts, Refusal, check};
 use da_ports::{SnapshotError, SnapshotSource};
 use std::path::Path;
 
@@ -13,11 +13,12 @@ pub enum Decision {
 /// Snapshot a run dir and decide a dispatch against it.
 pub fn check_dispatch<S: SnapshotSource>(
     source: &S,
+    flow: &Flow,
     run_dir: &Path,
-    dispatch: &Dispatch,
+    dispatch: DispatchRef,
 ) -> Result<Decision, SnapshotError> {
-    let facts: FsFacts = source.snapshot(run_dir)?;
-    Ok(match check(&facts, dispatch) {
+    let facts: FsFacts = source.snapshot(flow, run_dir)?;
+    Ok(match check(flow, &facts, dispatch) {
         Ok(allowed) => Decision::Allowed(allowed),
         Err(refusal) => Decision::Refused(refusal),
     })

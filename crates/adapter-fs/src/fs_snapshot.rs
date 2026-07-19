@@ -1,20 +1,21 @@
 use crate::gate_report::gate_verdict;
 use crate::run_edn::{EdnFacts, extract_edn_facts, parse_phase};
 use crate::steer_file::steer_answered;
-use da_domain::{FsFacts, Phase, RunId, StageFacts, StageFactsMap, StageId, SteerFacts, Verdict};
+use da_domain::{
+    Flow, FsFacts, Phase, RunId, StageDef, StageFacts, StageFactsMap, StageRef, SteerFacts, Verdict,
+};
 use da_ports::{SnapshotError, SnapshotSource};
 use std::path::{Path, PathBuf};
 
 /// Files never counted as stage output.
 const GITKEEP: &str = ".gitkeep";
 const STEER_FILE: &str = "STEER-REQUEST.md";
-const GATE_REPORT: &str = "gate-report.md";
 
 /// Reads a run dir (as laid out by `bin/run setup`) into [`FsFacts`].
 pub struct FsSnapshotSource;
 
 impl SnapshotSource for FsSnapshotSource {
-    fn snapshot(&self, run_dir: &Path) -> Result<FsFacts, SnapshotError> {
+    fn snapshot(&self, flow: &Flow, run_dir: &Path) -> Result<FsFacts, SnapshotError> {
         let edn_path: PathBuf = run_dir.join("run.edn");
         if !edn_path.is_file() {
             return Err(SnapshotError::NotARunDir {
@@ -27,14 +28,19 @@ impl SnapshotSource for FsSnapshotSource {
         let phase: Phase = refine_phase(&edn_path, edn.phase.as_deref())?;
 
         let mut stage_facts: Vec<StageFacts> = Vec::new();
-        for stage in StageId::ALL {
-            stage_facts.push(read_stage(run_dir, stage)?);
+        for (_, stage) in flow.stages() {
+            stage_facts.push(read_stage(run_dir, &stage.dir)?);
         }
-        let stages: StageFactsMap =
-            StageFactsMap::from_fn(|id: StageId| stage_facts[stage_index(id)].clone());
+        let stages: StageFactsMap = StageFactsMap::from_fn(flow, |stage: StageRef| {
+            stage_facts
+                .get(stage_index(flow, stage))
+                .cloned()
+                .unwrap_or_else(StageFacts::empty)
+        });
 
-        let gate: Option<Verdict> = read_gate(run_dir)?;
-        let commit_recorded: bool = stages.get(StageId::Commit).has_output();
+        let gate: Option<Verdict> = read_gate(flow, run_dir)?;
+        let (commit_ref, _): (StageRef, &StageDef) = flow.commit();
+        let commit_recorded: bool = stages.get(commit_ref).has_output();
         Ok(FsFacts {
             stages,
             gate,
@@ -45,8 +51,8 @@ impl SnapshotSource for FsSnapshotSource {
     }
 }
 
-fn read_stage(run_dir: &Path, stage: StageId) -> Result<StageFacts, SnapshotError> {
-    let output_dir: PathBuf = run_dir.join("stages").join(stage.dir_name()).join("output");
+fn read_stage(run_dir: &Path, stage_dir: &str) -> Result<StageFacts, SnapshotError> {
+    let output_dir: PathBuf = run_dir.join("stages").join(stage_dir).join("output");
     if !output_dir.is_dir() {
         return Ok(StageFacts::empty());
     }
@@ -80,12 +86,8 @@ fn read_stage(run_dir: &Path, stage: StageId) -> Result<StageFacts, SnapshotErro
     })
 }
 
-fn read_gate(run_dir: &Path) -> Result<Option<Verdict>, SnapshotError> {
-    let report_path: PathBuf = run_dir
-        .join("stages")
-        .join(StageId::Verify.dir_name())
-        .join("output")
-        .join(GATE_REPORT);
+fn read_gate(flow: &Flow, run_dir: &Path) -> Result<Option<Verdict>, SnapshotError> {
+    let report_path: PathBuf = run_dir.join(flow.gate_report_path());
     if !report_path.is_file() {
         return Ok(None);
     }
@@ -121,12 +123,8 @@ fn read_file(path: &Path) -> Result<String, SnapshotError> {
     })
 }
 
-fn stage_index(id: StageId) -> usize {
-    match id {
-        StageId::Design => 0,
-        StageId::Tests => 1,
-        StageId::Implement => 2,
-        StageId::Verify => 3,
-        StageId::Commit => 4,
-    }
+fn stage_index(flow: &Flow, target: StageRef) -> usize {
+    flow.stages()
+        .position(|(stage, _): (StageRef, &StageDef)| stage == target)
+        .unwrap_or(0)
 }
