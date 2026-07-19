@@ -121,7 +121,7 @@ fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
 fn hex_sha256(bytes: &[u8]) -> String {
     let mut hasher: Sha256 = Sha256::new();
     hasher.update(bytes);
-    format!("{:x}", hasher.finalize())
+    hasher.finalize().iter().map(|byte: &u8| format!("{byte:02x}")).collect()
 }
 
 #[cfg(test)]

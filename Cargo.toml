@@ -23,11 +23,11 @@ expect_used = "deny"
 
 [workspace.dependencies]
 thiserror = "2"
-ron = "0.10"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+ron = "0.12"
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "json", "rustls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 humantime = "2"
 clap = { version = "4", features = ["derive"] }
 proptest = "1"

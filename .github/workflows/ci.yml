@@ -12,7 +12,7 @@ jobs:
     name: cargo test + clippy + da-state selftest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
@@ -28,10 +28,10 @@ jobs:
     name: babashka selftests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: turtlequeue/setup-babashka@v1.8.0
         with:
-          babashka-version: 1.12.208
+          babashka-version: 1.12.218
       - name: bin/run selftest
         run: bb engine/bin/run --selftest
       - name: bin/steer selftest
@@ -46,8 +46,8 @@ jobs:
       run:
         working-directory: services/da-steer
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
