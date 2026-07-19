@@ -2,8 +2,10 @@
 
 **A staged Rust code factory for Claude Code — spec in, verified + committed change out.**
 
+[![ci](https://github.com/igouss/da-run/actions/workflows/ci.yml/badge.svg)](https://github.com/igouss/da-run/actions/workflows/ci.yml)
+
 ```sh
-unzip da-run-skill.zip -d ~/.claude/skills/
+git clone https://github.com/igouss/da-run.git ~/.claude/skills/da-run
 ```
 
 ## The problem
@@ -32,6 +34,7 @@ Gherkin scenario in the spec. The result lands on its own branch — never on `m
 | Pre-commit review | None | Adversarial pass, one verdict per Gherkin scenario |
 | Where the change lands | Wherever you were | Its own `da/<run-id>` branch, untouched `main` |
 | Mid-run steering | Start over | Edit any stage's `output/` file, re-run from there |
+| Ordering | Whatever the agent decides | Typed state machine, refuses out-of-order dispatch |
 
 ## Quick example
 
@@ -61,9 +64,16 @@ including the messy problem statement and elicitation exchange that produced it 
 
 ## Design philosophy
 
-- **The folder is the algorithm.** There's no framework or hidden state machine — `CLAUDE.md`,
-  `CONTEXT.md`, and `stages/*/CONTEXT.md` are the entire spec. Read the right file at the right
-  moment; a stage is done when its `output/` has files in it.
+- **The filesystem is the state.** There is a state machine — `da-state`, a typed Rust domain
+  crate — and the point is that it's *not* hidden: it re-derives the entire run state from the
+  run directory on every single call. No daemon holds it, no database caches it. So editing a
+  stage's `output/` file between stages *is* how you change the run's state; delete one and the
+  run honestly regresses. The files stay canonical, always.
+- **The pipeline is data; the laws are not.** `flows/<name>/flow.ron` declares the stages, dirs,
+  dispatch kinds, ordering guards, and model tiers — read that one file and you know the
+  pipeline. The two rules that make the machine worth trusting are deliberately *not*
+  configurable: an unanswered steer-request parks every dispatch, and commit demands a green gate
+  over the exact worktree it verified. Those live in the domain crate and are property-tested.
 - **Nothing advances on "looks right."** Each stage has an Audit. The gate is a shell script with
   an exit code, not a model's self-assessment.
 - **The gate stays mechanical.** `04-verify` is never a workflow and never an agent — it's
@@ -77,12 +87,19 @@ including the messy problem statement and elicitation exchange that produced it 
 
 ## Installation
 
-```sh
-# personal — available to all projects
-unzip da-run-skill.zip -d ~/.claude/skills/
+The skill is self-contained — the engine, the flows, and the optional services all live in this
+tree. There is no build step and no release artifact; installing it means putting the checkout
+where Claude Code looks for skills.
 
-# per-project — available only inside this repo
-unzip da-run-skill.zip -d <project>/.claude/skills/
+```sh
+# personal — available to every project
+git clone https://github.com/igouss/da-run.git ~/.claude/skills/da-run
+
+# or keep the checkout where you develop it and symlink
+ln -s ~/code/da-run ~/.claude/skills/da-run
+
+# per-project — available only inside one repo
+git clone https://github.com/igouss/da-run.git <project>/.claude/skills/da-run
 ```
 
 Requires [babashka](https://babashka.org) (`bb`), `git`, and `cargo` on `PATH` — cargo builds
@@ -95,7 +112,7 @@ work into the run.
 | Command | Stage | Notes |
 |---|---|---|
 | `/da-run design <spec>` | 01 | ECB design from the spec + existing code |
-| `/da-run design-review <spec>` | — | reviews the current design; warns if none exists yet |
+| `/da-run design-review <spec>` | 01 | reviews the current design; warns if none exists yet |
 | `/da-run tests <spec>` | 02 | failing Gherkin / property / unit tests, written before code |
 | `/da-run implement <spec>` | 03 | modifies the worktree to pass the tests |
 | `/da-run implement-parallel-attempt <spec> --attempts N` | 03 | N independent attempts, judged |
@@ -104,7 +121,30 @@ work into the run.
 | `/da-run all <spec>` | 01→05 | the whole pipeline; stops at the first red stage |
 
 Flags: `--project P` (target repo, default: cwd), `--run RUNDIR` (resume an existing run
-instance), `--attempts N` (parallel-attempt stages only).
+instance), `--flow NAME` (drive a pipeline other than `rust-factory` — a name under `flows/` or
+an absolute path), `--attempts N` (parallel-attempt stages only).
+
+Those stage names are `rust-factory`'s, the default flow. Another flow declares its own in its
+`flow.ron`; nothing in the engine hardcodes this list.
+
+## Steering
+
+A stage that hits a question it shouldn't answer alone doesn't guess — it writes
+`stages/<NN>/output/STEER-REQUEST.md` and stops. Every dispatch afterwards is refused (exit 3)
+until you answer, so a parked run can't be quietly stepped over:
+
+```sh
+bb engine/bin/steer check   --run <run-dir>                  # exit 3 = pending
+bb engine/bin/steer resolve --run <run-dir> --stage 02 \
+   --answer "..." --reason spec-gap                          # answered steers bind like the spec
+```
+
+The answer is keyed to a fingerprint of the question's content, so editing the request after the
+fact invalidates the answer rather than silently reusing it. `--reason`
+(`spec-gap | spec-wrong | scope-cut | preference | other`) classifies the interruption for the
+run's own metrics. Steering without a request is simpler still: edit any completed stage's
+`output/` file before running the next stage — the next stage reads what's on disk, not a cached
+copy of what the previous agent wrote.
 
 ## Architecture
 
@@ -120,18 +160,18 @@ Rust state machine that re-derives the run's state from the filesystem on every 
 stay canonical — ADR-0029 extended to the whole run) and answers `check <stage>` with allowed,
 steer-pending (exit 3), or a typed ordering refusal (exit 4). No path reaches "commit allowed"
 without a green gate over the exact worktree it verified and no pending steer — that law is
-property-tested and backed by an unforgeable proof token in the domain crate. `da-stage.js`
-refuses to run without a passing check in its args. And a run only derives **Committed** after
-`bin/run record-commit` resolves the commit in the worktree's own git — the commit agent's
-self-reported sha is a claim, never the record.
+property-tested and backed by an unforgeable `GateGreenProof` token in the domain crate, which
+only `commit_precondition` can mint. `da-stage.js` refuses to run without a passing check in its
+args. And a run only derives **Committed** after `bin/run record-commit` resolves the commit in
+the worktree's own git — the commit agent's self-reported sha is a claim, never the record.
 
 The pipeline itself — stage names, dirs, dispatch kinds, ordering guards, per-stage model
 tiers — is not compiled in anywhere: **`flows/<name>/flow.ron`** is the single source of truth,
 snapshotted into every run dir and validated at load time by the domain's `Flow::from_spec`
 (bad flow, no run). Every consumer reads it through `bin/state flow` as validated JSON:
 `bin/run` fail-fasts on it at setup, `workspace-lint` checks `stages/` on disk against it,
-and `da-stage.js` requires it as `args.flow`. The machine's laws (steer parks everything,
-commit demands a green gate) stay in code and are not configurable.
+and `da-stage.js` requires it as `args.flow`. Adding a pipeline is a new directory under
+`flows/` — not an engine change.
 
 `da-state notify` mirrors the derived state AND the run's artifacts (run.json, flow.ron,
 spec.md, every stage's outputs) to a `DaRun` Restate virtual object beside DaSteer — one
@@ -193,33 +233,42 @@ flowchart TD
 da-run/
   SKILL.md              the skill (Claude Code reads this)
   engine/               the machine — reusable across every flow
-    bin/run                 run driver (setup / seal / gate / squash / capture / restore)
+    bin/run                 run driver (setup / seal / gate / mark / record-commit /
+                            squash / capture / restore / selftest)
     bin/restore-check       live end-to-end mirror round-trip verification
     bin/state               run-state authority wrapper (builds/execs da-state)
     bin/steer               steer-request protocol
-    bin/workspace-lint       fitness functions incl. stages/ <-> flow.ron consistency
+    bin/workspace-lint      fitness functions incl. stages/ <-> flow.ron consistency
     workflows/
-      da-stage.js            single-stage dispatch (what the skill invokes)
-      da-arm-pre.js           design/tests/implement executor (incl. judged parallel attempts)
-      da-post-gate.js         atomized adversarial review + scoped commit
+      da-stage.js           single-stage dispatch (what the skill invokes)
+      da-arm-pre.js         design/tests/implement executor (incl. judged parallel attempts)
+      da-post-gate.js       atomized adversarial review + scoped commit
     gate/dispatch.sh        the canonical verdict renderer, installed into every run
     fixtures/               flows the engine's own tests use — never a shipped flow
   flows/                the skills — one directory per pipeline
     rust-factory/
       CLAUDE.md             the factory's identity + folder map (L0)
-      CONTEXT.md             task routing (L1)
-      flow.ron               THE pipeline definition: stages, dirs, dispatch kinds, guards
-      references/            house standards: hexagonal/ECB, testing, Rust (L3)
-      stages/01..05           stage contracts (Inputs/Process/Outputs/Audit) + default-gate.sh
-  crates/                 the da-state workspace (hexagonal: domain / ports / app / adapters)
-    domain/                 the pure state machine + Flow validation (load-time, typed errors)
-    ports/                  SnapshotSource / RunMirror / Artifact traits
-    app/                    status / check-dispatch / publish-mirror / restore-run use cases
-    adapter-fs/             run-dir reader + flow.ron loader + artifact collect/materialize
-    adapter-restate/        DaRun mirror client (reqwest + rustls; no curl subprocess)
-    wire/                   versioned JSON shapes (CLI output, mirror + flow payloads)
-  bins/da-state/          composition root: derive / status / check / flow / notify / restore / selftest
+      CONTEXT.md            task routing (L1)
+      flow.ron              THE pipeline definition: stages, dirs, dispatch kinds, guards
+      references/           house standards: hexagonal/ECB, testing, Rust, steering (L3)
+      stages/01..05         stage contracts (Inputs/Process/Outputs/Audit) + default-gate.sh
+  crates/               the da-state workspace (hexagonal: domain / ports / app / adapters)
+    domain/               the pure state machine + Flow validation (load-time, typed errors)
+    ports/                SnapshotSource / RunMirror / Artifact traits
+    app/                  status / check-dispatch / publish-mirror / restore-run use cases
+    adapter-fs/           run-dir reader + flow.ron loader + artifact collect/materialize
+    adapter-restate/      DaRun mirror client (reqwest + rustls; no curl subprocess)
+    wire/                 versioned JSON shapes (CLI output, mirror + flow payloads)
+  bins/da-state/        composition root: derive / status / check / flow / notify / restore / selftest
+  services/da-steer/    optional Restate endpoint: durable steer park + DaRun run mirror
+  infra/systemd/        units for running that service on a host
+  docs/decisions/       ADRs for this build's protocols
+  docs/open-questions/  decisions deliberately left open, with their trade-offs
 ```
+
+CI runs every verifier the repo owns on each push: `cargo test` + `clippy -D warnings` +
+`da-state selftest`, the three babashka selftests (`run`, `steer`, `workspace-lint`), and the
+da-steer service's typecheck/test/build.
 
 ## Provenance capture (optional)
 
@@ -238,19 +287,27 @@ Skip it for casual runs; use it when you care about provenance.
 |---|---|
 | `bb: command not found` | Install [babashka](https://babashka.org) — single static binary, no JVM needed |
 | Setup refuses with "dirty working tree" | Commit or stash your changes in the target project first — da-run never mixes an ad-hoc run with unstaged work |
-| `tests`/`implement`/`commit` refuses with an ordering error | Run the missing prior stage — the message names which one |
+| `tests`/`implement`/`commit` refuses with an ordering error (exit 4) | Run the missing prior stage — the message names which one |
+| Every dispatch refuses with exit 3 | A steer-request is pending. Read `stages/<NN>/output/STEER-REQUEST.md`, answer it with `bin/steer resolve`, then re-dispatch |
 | Gate says `FAIL: .da/gate exists but is not executable` | `chmod +x .da/gate` — a present-but-broken project gate fails closed, it never silently falls back to the default |
 | `hex-lint` / `effect-audit` / `cargo-mutants` reported SKIP | Optional deepeners, not installed — `cargo install` from `~/code/tools/hex-lint`, `~/code/tools/effect-audit`, or `cargo install cargo-mutants` if you want them enforced |
-| Stage dispatch refuses with "needs args.workflowsDir" | Pass the skill bundle's own `workflows/` directory explicitly — the engines (`da-arm-pre.js`, `da-post-gate.js`) live beside `da-stage.js` in the bundle |
+| Stage dispatch refuses with "needs args.workflowsDir" | Pass the skill bundle's own `engine/workflows/` directory explicitly — the engines (`da-arm-pre.js`, `da-post-gate.js`) live beside `da-stage.js` in the bundle |
+| Commit stage reported success but the run isn't `Committed` | Run `bb engine/bin/run record-commit --run <run-dir>` — a run is committed only once git confirms the branch tip moved, never on the agent's word |
 
 ## Limitations
 
-- Rust-only. The gate's default chain is `cargo test` + `cargo clippy`; other languages need
-  their own `.da/gate`.
-- No partial-file edits mid-stage: steering happens by editing a stage's `output/` file wholesale
-  between stages, not by patching mid-run.
-- The default gate's hex-lint and effect-audit deepeners are house-specific tools (cargo-mutants is a published crate), not
-  published crates — without them on `PATH` you get their checks skipped, not enforced.
+- Rust-only in practice. The gate's default chain is `cargo test` + `cargo clippy`; other
+  languages need their own `.da/gate`.
+- One flow ships (`rust-factory`). The engine is flow-agnostic and a new pipeline is a new
+  directory under `flows/`, but you'd be writing that pipeline's stage contracts yourself.
+- Steering is between stages, not inside one. A stage can pause to ask you a question, and you
+  can rewrite any completed stage's `output/` wholesale — but you can't patch a stage's work
+  while it's in flight.
+- The default gate's `hex-lint` and `effect-audit` deepeners are house-specific tools
+  (`cargo-mutants` is a published crate), not published crates — without them on `PATH` you get
+  their checks skipped, not enforced.
+- No packaged release. Installing means cloning or symlinking this repo into your skills
+  directory; there's no versioned artifact to pin.
 - Runs never merge to `main` themselves. That's deliberate, not a missing feature — but it means
   someone still has to look at the branch and merge it.
 
@@ -267,6 +324,16 @@ if they were wrong) and re-run `verify`.
 **Can I steer a run without restarting it?**
 Yes — edit any stage's `output/` file before running the next stage. The next stage reads
 whatever's on disk, not a cached copy of what the previous agent originally wrote.
+
+**Where does run state actually live?**
+In the run directory, and nowhere else. `da-state` derives it fresh from those files on every
+call rather than storing it, which is why hand-editing the files is a supported way to steer
+instead of a way to corrupt the run.
+
+**Isn't a "typed state machine" the hidden machinery this was supposed to avoid?**
+The machinery is real; hiding it is what's avoided. The pipeline is one readable data file
+(`flow.ron`), the state is a pure function of the directory, and the machine's job is to refuse
+bad orderings out loud — not to remember things behind your back.
 
 **Why is `verify` never an LLM step?**
 Because the one place a run absolutely cannot fool itself is the ship/no-ship decision. A shell
@@ -296,10 +363,14 @@ community contributions, but it's the only way I can move at this velocity and k
 
 ## Provenance
 
-Grown out of ICM-lineage folder-as-algorithm research (ADRs 0001-0029), via the first trial
-implementation (`~/code/da-run`). This repo (`da-run2`) is the second build and the canonical
-home: it carries every fix from the deep review of the first — content-fingerprinted steer
-keys, git-verified commit records, one-call mirror publishes, flow-named input stages, and
-the trial instrumentation — see `docs/open-questions/` for what was decided and
-`docs/decisions/` for the two new protocol ADRs. The skill, the workflows, the da-state
+Grown out of ICM-lineage folder-as-algorithm research (ADRs 0001-0029). `main` is the second
+build and the canonical one; the first trial implementation is preserved on the
+[`version1`](https://github.com/igouss/da-run/tree/version1) branch, unrelated in history and
+kept only for reference.
+
+The rebuild carries every fix from the deep review of that first attempt — content-fingerprinted
+steer keys, git-verified commit records, one-call mirror publishes, flow-named input stages, and
+the trial instrumentation. See [`docs/decisions/`](docs/decisions/) for this build's four
+protocol ADRs and [`docs/open-questions/`](docs/open-questions/) for the decisions deliberately
+left open, each with its trade-offs written down. The skill, the workflows, the da-state
 authority, and the da-steer/DaRun Restate services all live and deploy from here.
