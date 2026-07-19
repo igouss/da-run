@@ -6,7 +6,7 @@
 mod common;
 
 use common::{
-    dispatch_ref, fresh_facts, implemented_facts, test_flow, with_drifted_worktree,
+    fresh_facts, implemented_facts, test_flow, with_drifted_worktree,
     with_empty_worktree, with_gated_worktree, with_output, with_steer,
 };
 use da_domain::{Anomaly, Flow, FsFacts, Refusal, RunState, Verdict, Warning, check, derive};
@@ -29,7 +29,7 @@ fn fresh_run_refuses_tests() {
     let flow: Flow = test_flow();
     let facts: FsFacts = fresh_facts(&flow);
     assert_eq!(
-        check(&flow, &facts, dispatch_ref(&flow, "tests")),
+        check(&flow, &facts, "tests"),
         Err(Refusal::OrderingViolation {
             code: "tests-before-design".to_string(),
             detail: "tests before stages/01-design/output/ has a design".to_string(),
@@ -42,7 +42,7 @@ fn fresh_run_refuses_implement() {
     let flow: Flow = test_flow();
     let facts: FsFacts = fresh_facts(&flow);
     assert_eq!(
-        check(&flow, &facts, dispatch_ref(&flow, "implement")),
+        check(&flow, &facts, "implement"),
         Err(Refusal::OrderingViolation {
             code: "implement-before-tests".to_string(),
             detail: "implement before stages/02-tests/output/ has a test plan".to_string(),
@@ -54,7 +54,7 @@ fn fresh_run_refuses_implement() {
 fn fresh_run_warns_on_design_review() {
     let flow: Flow = test_flow();
     let facts: FsFacts = fresh_facts(&flow);
-    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "design-review"))
+    let warnings: Vec<Warning> = check(&flow, &facts, "design-review")
         .unwrap()
         .warnings;
     assert_eq!(
@@ -83,7 +83,7 @@ fn one_design_file_is_designed() {
 fn one_design_file_allows_tests() {
     let flow: Flow = test_flow();
     let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "design", "design.md");
-    assert!(check(&flow, &facts, dispatch_ref(&flow, "tests")).is_ok());
+    assert!(check(&flow, &facts, "tests").is_ok());
 }
 
 // Scenario: a green gate allows commit
@@ -101,7 +101,7 @@ fn green_gate_on_the_verified_worktree_allows_commit() {
     let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Green);
     let facts: FsFacts = with_gated_worktree(&facts, "wt-verified");
-    assert!(check(&flow, &facts, dispatch_ref(&flow, "commit")).is_ok());
+    assert!(check(&flow, &facts, "commit").is_ok());
 }
 
 // Scenario: a green gate over a worktree that has since moved refuses commit.
@@ -114,7 +114,7 @@ fn green_gate_on_a_moved_worktree_refuses_commit() {
     facts.gate = Some(Verdict::Green);
     let facts: FsFacts = with_drifted_worktree(&facts, "wt-verified", "wt-now");
     assert!(matches!(
-        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        check(&flow, &facts, "commit"),
         Err(Refusal::WorktreeMovedSinceGate { .. })
     ));
 }
@@ -128,7 +128,7 @@ fn green_gate_over_an_empty_worktree_refuses_commit() {
     facts.gate = Some(Verdict::Green);
     let facts: FsFacts = with_empty_worktree(&facts, "wt-empty");
     assert!(matches!(
-        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        check(&flow, &facts, "commit"),
         Err(Refusal::WorktreeEmpty)
     ));
 }
@@ -140,7 +140,7 @@ fn green_gate_without_a_worktree_patch_refuses_commit() {
     let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Green);
     assert!(matches!(
-        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        check(&flow, &facts, "commit"),
         Err(Refusal::WorktreeAbsent)
     ));
 }
@@ -152,7 +152,7 @@ fn red_gate_refuses_commit_with_typed_reason() {
     let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Red);
     assert_eq!(
-        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        check(&flow, &facts, "commit"),
         Err(Refusal::CommitBeforeGreenGate {
             gate: Some(Verdict::Red),
             gate_report: "stages/04-verify/output/gate-report.md".to_string(),
@@ -165,7 +165,7 @@ fn red_gate_allows_implement_rework_with_warning() {
     let flow: Flow = test_flow();
     let mut facts: FsFacts = implemented_facts(&flow);
     facts.gate = Some(Verdict::Red);
-    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "implement"))
+    let warnings: Vec<Warning> = check(&flow, &facts, "implement")
         .unwrap()
         .warnings;
     assert!(warnings.contains(&Warning::RedGateRework));
@@ -177,7 +177,7 @@ fn absent_gate_report_refuses_commit() {
     let flow: Flow = test_flow();
     let facts: FsFacts = implemented_facts(&flow);
     assert_eq!(
-        check(&flow, &facts, dispatch_ref(&flow, "commit")),
+        check(&flow, &facts, "commit"),
         Err(Refusal::CommitBeforeGreenGate {
             gate: None,
             gate_report: "stages/04-verify/output/gate-report.md".to_string(),
@@ -198,7 +198,7 @@ fn unanswered_steer_refuses_design_too() {
     let flow: Flow = test_flow();
     let facts: FsFacts = with_steer(&flow, &fresh_facts(&flow), "tests", false);
     assert_eq!(
-        check(&flow, &facts, dispatch_ref(&flow, "design")),
+        check(&flow, &facts, "design"),
         Err(Refusal::SteerPending {
             stages: vec!["02-tests".to_string()]
         })
@@ -250,7 +250,7 @@ fn implement_output_without_tests_still_refuses_implement() {
     let flow: Flow = test_flow();
     let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "implement", "notes.md");
     assert_eq!(
-        check(&flow, &facts, dispatch_ref(&flow, "implement")),
+        check(&flow, &facts, "implement"),
         Err(Refusal::OrderingViolation {
             code: "implement-before-tests".to_string(),
             detail: "implement before stages/02-tests/output/ has a test plan".to_string(),
@@ -272,7 +272,7 @@ fn commit_record_is_committed() {
 fn steady_state_redispatch_of_complete_stage_warns() {
     let flow: Flow = test_flow();
     let facts: FsFacts = with_output(&flow, &fresh_facts(&flow), "design", "design.md");
-    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "design"))
+    let warnings: Vec<Warning> = check(&flow, &facts, "design")
         .unwrap()
         .warnings;
     assert_eq!(
@@ -288,7 +288,7 @@ fn steady_state_redispatch_of_complete_stage_warns() {
 fn verify_on_empty_implementation_warns() {
     let flow: Flow = test_flow();
     let facts: FsFacts = fresh_facts(&flow);
-    let warnings: Vec<Warning> = check(&flow, &facts, dispatch_ref(&flow, "verify"))
+    let warnings: Vec<Warning> = check(&flow, &facts, "verify")
         .unwrap()
         .warnings;
     assert_eq!(

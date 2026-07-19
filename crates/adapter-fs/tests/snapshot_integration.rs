@@ -33,7 +33,7 @@ fn stage_ref(flow: &Flow, name: &str) -> StageRef {
 }
 
 fn write_output(dir: &TempDir, flow: &Flow, name: &str, file: &str, content: &str) {
-    let stage_dir: String = flow.stage(stage_ref(flow, name)).dir.clone();
+    let stage_dir: String = flow.stage(stage_ref(flow, name)).unwrap().dir.clone();
     let output: PathBuf = dir.path().join("stages").join(stage_dir).join("output");
     fs::write(output.join(file), content).unwrap();
 }

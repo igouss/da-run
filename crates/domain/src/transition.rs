@@ -19,15 +19,27 @@ pub struct Allowed {
 #[derive(Debug)]
 pub struct GateGreenProof(());
 
-/// Decide a dispatch against the facts. The ordering guards are the flow's
-/// blocking rules; the steer and gate laws are the machine's own; warnings
-/// never block.
-pub fn check(flow: &Flow, facts: &FsFacts, dispatch: DispatchRef) -> Result<Allowed, Refusal> {
+/// Decide a dispatch, named by its kind, against the facts. The ordering
+/// guards are the flow's blocking rules; the steer and gate laws are the
+/// machine's own; warnings never block. An unknown kind is a refusal, never
+/// a guess at a different dispatch — refs stay inside this function, so no
+/// caller can hold one minted by a different flow.
+pub fn check(flow: &Flow, facts: &FsFacts, kind: &str) -> Result<Allowed, Refusal> {
     let parked: Vec<String> = pending_steers(flow, facts);
     if !parked.is_empty() {
         return Err(Refusal::SteerPending { stages: parked });
     }
-    let (stage, spec): (&StageDef, &DispatchDef) = flow.dispatch(dispatch);
+    let Some((dispatch, stage, spec)): Option<(DispatchRef, &StageDef, &DispatchDef)> = flow
+        .resolve_dispatch(kind)
+        .and_then(|dispatch: DispatchRef| {
+            flow.dispatch(dispatch)
+                .map(|(stage, spec): (&StageDef, &DispatchDef)| (dispatch, stage, spec))
+        })
+    else {
+        return Err(Refusal::UnknownDispatch {
+            kind: kind.to_string(),
+        });
+    };
     for rule in &spec.blocking {
         let missing: bool = !facts.stages.get(rule.stage).has_output();
         if missing {

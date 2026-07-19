@@ -91,6 +91,12 @@ fn reason_wire(refusal: &Refusal) -> ReasonWire {
             gate: gate.map(|verdict: Verdict| crate::derived::verdict_str(verdict).to_string()),
             stages: Vec::new(),
         },
+        Refusal::UnknownDispatch { .. } => ReasonWire {
+            code: "unknown-dispatch".to_string(),
+            detail,
+            gate: None,
+            stages: Vec::new(),
+        },
         Refusal::SteerPending { stages } => ReasonWire {
             code: "steer-pending".to_string(),
             detail,

@@ -68,8 +68,10 @@ pub struct AdviseRuleSpec {
     pub code: String,
 }
 
-/// A validated stage handle — only a [`Flow`] mints one, so holding a
-/// `StageRef` proves the stage exists in the flow that issued it.
+/// A stage handle minted by a [`Flow`]. It is an index, not a proof: using a
+/// ref against a flow other than the one that minted it is a logic error the
+/// type does not prevent — which is why every lookup taking one is fallible
+/// and bounds-checked rather than total.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StageRef(usize);
 
@@ -254,10 +256,10 @@ impl Flow {
             .map(|(index, stage): (usize, &StageDef)| (StageRef(index), stage))
     }
 
-    /// Total: a foreign or stale ref falls back to the first stage rather
-    /// than panicking (a flow is never empty).
-    pub fn stage(&self, stage: StageRef) -> &StageDef {
-        self.stages.get(stage.0).unwrap_or(&self.stages[0])
+    /// Fallible: a foreign or stale ref reads as `None`, never as a
+    /// different stage — a wrong answer would outlive the bug that made it.
+    pub fn stage(&self, stage: StageRef) -> Option<&StageDef> {
+        self.stages.get(stage.0)
     }
 
     pub fn stage_named(&self, name: &str) -> Option<StageRef> {
@@ -306,14 +308,11 @@ impl Flow {
             })
     }
 
-    /// Total via the same fallback as [`Flow::stage`].
-    pub fn dispatch(&self, dispatch: DispatchRef) -> (&StageDef, &DispatchDef) {
-        let stage: &StageDef = self.stage(dispatch.stage());
-        let def: &DispatchDef = stage
-            .dispatches
-            .get(dispatch.dispatch)
-            .unwrap_or(&stage.dispatches[0]);
-        (stage, def)
+    /// Fallible for the same reason as [`Flow::stage`].
+    pub fn dispatch(&self, dispatch: DispatchRef) -> Option<(&StageDef, &DispatchDef)> {
+        let stage: &StageDef = self.stage(dispatch.stage())?;
+        let def: &DispatchDef = stage.dispatches.get(dispatch.dispatch)?;
+        Some((stage, def))
     }
 
     pub fn dispatch_kinds(&self) -> Vec<&str> {

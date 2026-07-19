@@ -10,7 +10,7 @@ use da_app::{
     Decision, PublishError, RestoreError, Restored, check_dispatch, publish_mirror, restore_run,
     status,
 };
-use da_domain::{Derived, DispatchRef, Flow, FsFacts, Refusal, RunId, derive};
+use da_domain::{Derived, Flow, FsFacts, Refusal, RunId, derive};
 use da_ports::{SnapshotError, SnapshotSource};
 use da_wire::{CheckWire, DerivedWire, FlowWire, StatusWire};
 use std::path::{Path, PathBuf};
@@ -83,16 +83,17 @@ fn run_status(flow: &Flow, run_dir: &Path) -> Outcome {
 }
 
 fn run_check(flow: &Flow, run_dir: &Path, dispatch: &str) -> Outcome {
-    let Some(resolved) = flow.resolve_dispatch(dispatch) else {
-        return unknown_dispatch(flow, dispatch);
-    };
-    let resolved: DispatchRef = resolved;
-    match check_dispatch(&FsSnapshotSource, flow, run_dir, resolved) {
+    match check_dispatch(&FsSnapshotSource, flow, run_dir, dispatch) {
         Ok(Decision::Allowed(allowed)) => Outcome {
             json: to_json(&CheckWire::allowed(&allowed)),
             pretty: None,
             exit_code: EXIT_OK,
         },
+        // The CLI contract for a typo'd kind predates the typed refusal:
+        // an error payload listing the flow's kinds, exit 2.
+        Ok(Decision::Refused(Refusal::UnknownDispatch { .. })) => {
+            unknown_dispatch(flow, dispatch)
+        }
         Ok(Decision::Refused(refusal)) => Outcome {
             json: to_json(&CheckWire::refused(&refusal)),
             pretty: None,

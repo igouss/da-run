@@ -184,7 +184,7 @@ fn check_dispatch_allows_tests_after_design() {
         &source,
         &flow,
         Path::new("unused"),
-        flow.resolve_dispatch("tests").unwrap(),
+        "tests",
     )
     .unwrap();
     assert!(matches!(decision, Decision::Allowed(_)));
@@ -200,7 +200,7 @@ fn check_dispatch_relays_a_refusal_as_a_value() {
         &source,
         &flow,
         Path::new("unused"),
-        flow.resolve_dispatch("commit").unwrap(),
+        "commit",
     )
     .unwrap();
     assert_eq!(
@@ -225,7 +225,7 @@ fn check_dispatch_surfaces_snapshot_errors() {
         &source,
         &flow,
         Path::new("nowhere"),
-        flow.resolve_dispatch("design").unwrap(),
+        "design",
     )
     .unwrap_err();
     assert!(matches!(error, SnapshotError::NotARunDir { .. }));

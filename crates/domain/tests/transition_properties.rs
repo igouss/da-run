@@ -5,9 +5,7 @@
 mod common;
 
 use common::{arb_facts, arb_stage_facts, test_flow};
-use da_domain::{
-    DispatchRef, Flow, FsFacts, Refusal, StageFacts, StageFactsMap, StageRef, Verdict, check,
-};
+use da_domain::{Flow, FsFacts, Refusal, StageFacts, StageFactsMap, StageRef, Verdict, check};
 use proptest::prelude::*;
 
 fn arb_dispatch_kind() -> impl Strategy<Value = String> {
@@ -33,8 +31,7 @@ proptest! {
     #[test]
     fn commit_allowed_implies_green_gate_and_no_steer(facts in arb_facts()) {
         let flow: Flow = test_flow();
-        let commit: DispatchRef = flow.resolve_dispatch("commit").unwrap();
-        if check(&flow, &facts, commit).is_ok() {
+        if check(&flow, &facts, "commit").is_ok() {
             prop_assert_eq!(facts.gate, Some(Verdict::Green));
             for (stage, _) in flow.stages() {
                 prop_assert!(!facts.stages.get(stage).steer_pending());
@@ -51,11 +48,11 @@ proptest! {
     ) {
         let flow: Flow = test_flow();
         let parked: FsFacts = common::with_steer(&flow, &facts, &steer_stage, false);
-        let dispatch: DispatchRef = flow.resolve_dispatch(&kind).unwrap();
-        let refusal: Refusal = check(&flow, &parked, dispatch)
+        let refusal: Refusal = check(&flow, &parked, &kind)
             .expect_err("a pending steer must refuse every dispatch");
         let steer_dir: String = flow
             .stage(common::stage_ref(&flow, &steer_stage))
+            .expect("the fixture flow resolves its own stages")
             .dir
             .clone();
         match refusal {
@@ -72,8 +69,7 @@ proptest! {
         let mut empty_design: StageFacts = design;
         empty_design.output_files.clear();
         let facts: FsFacts = rebuild_stage(&flow, &facts, "design", empty_design);
-        let tests: DispatchRef = flow.resolve_dispatch("tests").unwrap();
-        if check(&flow, &facts, tests).is_ok() {
+        if check(&flow, &facts, "tests").is_ok() {
             prop_assert!(false, "tests must be refused while the design is empty");
         }
     }
@@ -86,8 +82,7 @@ proptest! {
             steer: facts.stages.get(common::stage_ref(&flow, "tests")).steer.clone(),
         };
         let facts: FsFacts = rebuild_stage(&flow, &facts, "tests", replacement);
-        let implement: DispatchRef = flow.resolve_dispatch("implement").unwrap();
-        if check(&flow, &facts, implement).is_ok() {
+        if check(&flow, &facts, "implement").is_ok() {
             prop_assert!(false, "implement must be refused while tests are empty");
         }
     }
@@ -97,8 +92,24 @@ proptest! {
     fn design_always_allowed_without_steer(facts in arb_facts()) {
         let flow: Flow = test_flow();
         let calm: FsFacts = clear_steers(&flow, &facts);
-        prop_assert!(check(&flow, &calm, flow.resolve_dispatch("design").unwrap()).is_ok());
-        prop_assert!(check(&flow, &calm, flow.resolve_dispatch("design-review").unwrap()).is_ok());
+        prop_assert!(check(&flow, &calm, "design").is_ok());
+        prop_assert!(check(&flow, &calm, "design-review").is_ok());
+    }
+
+    // P6 — an unknown dispatch kind is its own typed refusal (or a steer
+    // park), never a silent resolution to some other dispatch.
+    #[test]
+    fn unknown_kind_never_resolves_to_another_dispatch(
+        facts in arb_facts(),
+        kind in "[a-z]{1,12}",
+    ) {
+        let flow: Flow = test_flow();
+        prop_assume!(flow.resolve_dispatch(&kind).is_none());
+        match check(&flow, &facts, &kind) {
+            Err(Refusal::UnknownDispatch { kind: named }) => prop_assert_eq!(named, kind),
+            Err(Refusal::SteerPending { .. }) => {} // steers park everything, even typos
+            other => prop_assert!(false, "expected UnknownDispatch, got {other:?}"),
+        }
     }
 }
 

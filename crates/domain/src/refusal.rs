@@ -18,6 +18,10 @@ pub enum Refusal {
         /// The gate report's run-dir-relative path, from the flow.
         gate_report: String,
     },
+    /// The dispatch kind names nothing in the run's flow — a typo'd stage
+    /// verb or a kind from a different flow.
+    #[error("unknown dispatch {kind:?} — not in the run's flow.ron")]
+    UnknownDispatch { kind: String },
     /// Stage dirs holding an unanswered steer-request, in pipeline order.
     #[error("a steer-request awaits the operator at {}", stages.join(", "))]
     SteerPending { stages: Vec<String> },
