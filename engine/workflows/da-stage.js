@@ -8,7 +8,7 @@ export const meta = {
 }
 
 // args:
-//   runDir       absolute path to the run instance (holds CLAUDE.md, stages/, worktree/, run.edn, spec.md)
+//   runDir       absolute path to the run instance (holds CLAUDE.md, stages/, worktree/, run.json, spec.md)
 //   stage        a dispatch kind from the run's flow.ron (e.g. 'design', 'tests', 'commit')
 //   flow         REQUIRED: the validated pipeline JSON printed by
 //                `bash "$SKILL_DIR/engine/bin/state" flow --run <runDir>` — stage names,

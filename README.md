@@ -133,12 +133,12 @@ snapshotted into every run dir and validated at load time by the domain's `Flow:
 and `da-stage.js` requires it as `args.flow`. The machine's laws (steer parks everything,
 commit demands a green gate) stay in code and are not configurable.
 
-`da-state notify` mirrors the derived state AND the run's artifacts (run.edn, flow.ron,
+`da-state notify` mirrors the derived state AND the run's artifacts (run.json, flow.ron,
 spec.md, every stage's outputs) to a `DaRun` Restate virtual object beside DaSteer — one
 `recordSnapshot` call, so the mirror can never advertise a state its artifacts do not support.
 Anything on the tailnet can read run status without touching the run dir, and a mirrored run
 can be rebuilt on another machine with `bin/run restore --run-id <id>` (the worktree is
-recreated from the target project's git, per run.edn). Deploying this repo's service replaces
+recreated from the target project's git, per run.json). Deploying this repo's service replaces
 the old two-handler protocol — re-register the endpoint with Restate after the first deploy.
 
 Every run also journals its own observability (`events.jsonl`): dispatch marks, gate colors,

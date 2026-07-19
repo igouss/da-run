@@ -38,10 +38,12 @@ fi
 # guess at: tests that pass while asserting nothing. Diff-scoped (--in-diff)
 # so it only mutates what this change touched — a full-tree run belongs in a
 # project's own .da/gate, not the per-change default. Loud SKIP when absent.
-# The change = worktree vs the run's base commit (from ../run.edn when run
-# inside a run instance; falls back to HEAD~ outside one).
+# The change = worktree vs the run's base commit (from ../run.json when run
+# inside a run instance; falls back to HEAD~ outside one). run.json is JSON
+# precisely so this script can read it with a real parser (ADR-0003); bb is
+# already a hard dependency of the skill.
 if command -v cargo-mutants >/dev/null 2>&1; then
-  base=$(sed -n 's/.*:base-commit "\([0-9a-f]*\)".*/\1/p' ../run.edn 2>/dev/null || true)
+  base=$(bb -e "(some-> (slurp \"../run.json\") (cheshire.core/parse-string) (get \"base-commit\") println)" 2>/dev/null || true)
   diff_file=$(mktemp)
   git diff "${base:-HEAD~}" > "$diff_file" 2>/dev/null || : > "$diff_file"
   if [ -s "$diff_file" ]; then

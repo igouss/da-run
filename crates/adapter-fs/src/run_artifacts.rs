@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 /// makes the mirror sufficient on its own: it carries the run's code, so a
 /// restore needs neither the origin host's paths nor a pushed branch.
 const ROOT_FILES: [&str; 5] = [
-    "run.edn",
+    "run.json",
     "flow.ron",
     "spec.md",
     "worktree.patch",

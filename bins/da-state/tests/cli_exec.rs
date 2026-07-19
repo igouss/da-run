@@ -13,8 +13,8 @@ const FIXTURE_FLOW: &str = include_str!("../../../engine/fixtures/minimal-flow.r
 
 fn scaffold(run_dir: &Path) {
     fs::write(
-        run_dir.join("run.edn"),
-        "{:run-id \"cli-test\" :phase \"steady-state\"}",
+        run_dir.join("run.json"),
+        r#"{"run-id":"cli-test","phase":"steady-state"}"#,
     )
     .unwrap();
     fs::write(run_dir.join("flow.ron"), FIXTURE_FLOW).unwrap();

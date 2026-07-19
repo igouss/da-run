@@ -244,7 +244,7 @@ fn publish_mirror_sends_run_id_and_derived_state() {
     };
     let artifacts: FixedArtifacts = FixedArtifacts {
         files: vec![RunArtifact {
-            path: "run.edn".to_string(),
+            path: "run.json".to_string(),
             content: "{}".to_string(),
         }],
     };

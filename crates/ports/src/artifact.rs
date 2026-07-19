@@ -3,7 +3,7 @@ use da_domain::Flow;
 use std::path::Path;
 
 /// One run artifact: a run-dir-relative path and its UTF-8 content.
-/// Artifacts are the run's durable ephemera — run.edn, flow.ron, spec.md,
+/// Artifacts are the run's durable ephemera — run.json, flow.ron, spec.md,
 /// every stage's output/ files, and `worktree.patch`.
 ///
 /// The patch is what makes the mirror sufficient on its own. Branch and base

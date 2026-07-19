@@ -74,7 +74,7 @@ function stagePrompt(runDir, stageDir) {
     `that is your ENTIRE contract: load only what its Inputs table names, do its Process, run ` +
     `its Audit before writing, and write exactly its Outputs. Prior stages' outputs are under ` +
     `${runDir}/stages/*/output/; the codebase under change is ${runDir}/worktree; run metadata ` +
-    `is in ${runDir}/run.edn. Do not redo an earlier stage or start a later one.\n\n` +
+    `is in ${runDir}/run.json. Do not redo an earlier stage or start a later one.\n\n` +
     `Constraints (isolated experiment run): operate ONLY within the run dir and its worktree; ` +
     `never \`git push\`; never touch \`main\` or any other checkout; never flash hardware, call ` +
     `a live endpoint, or read/use any bearer token.`
@@ -108,7 +108,7 @@ function attemptPrompt(runDir, spec, index) {
   return (
     `Stage ${spec.dir}, ATTEMPT ${index}, one of several independent parallel attempts that ` +
     `will be judged. Create your own throwaway git worktree off the SAME base commit as ` +
-    `${runDir}/worktree (read the base commit from ${runDir}/run.edn): \n` +
+    `${runDir}/worktree (read the base commit from ${runDir}/run.json): \n` +
     `  git -C <the target project repo, same repo as ${runDir}/worktree> worktree add ` +
     `${wt} <base-commit>\n` +
     `Implement the change there per the design at ` +

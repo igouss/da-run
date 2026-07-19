@@ -18,7 +18,7 @@ No error, no warning — the artifact simply comes back different from how it we
 
 ## Why it is low severity today
 
-Everything currently collected is text authored by agents or by git: `run.edn`, `flow.ron`,
+Everything currently collected is text authored by agents or by git: `run.json`, `flow.ron`,
 `spec.md`, markdown stage outputs, and `worktree.patch`. The patch is the interesting one, and
 it is safe *by construction*: `seal` uses `git diff --binary`, and git ASCII-armours binary
 hunks (base85 inside a text patch), so the output is valid UTF-8 even when the change touches

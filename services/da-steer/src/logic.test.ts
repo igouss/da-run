@@ -44,7 +44,7 @@ describe("DaRun mirror", () => {
     const store: FakeStore = new FakeStore();
     await recordSnapshot(store, {
       state: derived("gated-green"),
-      files: [{ path: "run.edn", content: "{}" }],
+      files: [{ path: "run.json", content: "{}" }],
     });
     const snapshot = await getSnapshot(store);
     expect(snapshot.state?.state).toBe("gated-green");
@@ -56,17 +56,17 @@ describe("DaRun mirror", () => {
     await recordSnapshot(store, {
       state: derived("designed"),
       files: [
-        { path: "run.edn", content: "{}" },
+        { path: "run.json", content: "{}" },
         { path: "stages/01-plan/output/plan.md", content: "# plan" },
       ],
     });
     await recordSnapshot(store, {
       state: derived("gated-red"),
-      files: [{ path: "run.edn", content: "{}" }],
+      files: [{ path: "run.json", content: "{}" }],
     });
     const snapshot = await getSnapshot(store);
     expect(snapshot.state?.state).toBe("gated-red");
-    expect(snapshot.files.map((file) => file.path)).toEqual(["run.edn"]);
+    expect(snapshot.files.map((file) => file.path)).toEqual(["run.json"]);
   });
 
   it("absent files field replaces with an empty set, not a stale one", async () => {

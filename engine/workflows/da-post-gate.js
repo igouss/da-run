@@ -12,7 +12,7 @@ export const meta = {
 // args (all required — this workflow never touches the filesystem itself, so every
 // path an agent needs must arrive pre-resolved by the caller from the run's flow.ron;
 // no stage dir or artifact name lives in this script):
-//   runDir           absolute path to the run instance (holds CLAUDE.md, stages/, worktree/, run.edn)
+//   runDir           absolute path to the run instance (holds CLAUDE.md, stages/, worktree/, run.json)
 //   worktree         absolute path to the target project's worktree (runDir + '/worktree')
 //   round            the round id (for labeling only)
 //   commitModel      model id for the commit stage (the flow pins it per ADR-0009; a
@@ -111,7 +111,7 @@ function atomVerifyPrompt(runDir, scenario) {
     `You are an INDEPENDENT ADVERSARIAL reviewer. You get exactly ONE scenario and the ` +
     `diff; you do not see any other scenario. Construct an input satisfying the scenario's ` +
     `Given/When where the diff at ${runDir}/worktree (run \`git -C ${runDir}/worktree diff\` ` +
-    `against the run's base commit in ${runDir}/run.edn to see it) VIOLATES the scenario's Then. ` +
+    `against the run's base commit in ${runDir}/run.json to see it) VIOLATES the scenario's Then. ` +
     `Default to violated=false only when you tried and could not construct one — do not default ` +
     `to false out of politeness.\n\n` +
     `Scenario ${scenario.id} — ${scenario.title}\n` +
@@ -180,7 +180,7 @@ function commitPrompt(runDir, reviewSummary, honestVerdict) {
     `The commit stage. The mechanical gate at ${args.gateReportPath} ` +
     `is GREEN. Adversarial review outcome: ${honestVerdict}. Read the ` +
     `full \`git -C ${runDir}/worktree diff\` against the run's base commit (in ` +
-    `${runDir}/run.edn) and ${runDir}/spec.md. Write a scoped commit message: a ` +
+    `${runDir}/run.json) and ${runDir}/spec.md. Write a scoped commit message: a ` +
     `\`<scope>: <imperative, lowercase>\` subject, then a body saying WHAT changed and WHY (the ` +
     `spec's intent) — never a type-first Conventional-Commits prefix. The stages committed their ` +
     `own work-in-progress so it would survive a host move; collapse that history FIRST with ` +

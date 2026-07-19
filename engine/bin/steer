@@ -242,7 +242,7 @@
 (defn ingress [] (System/getenv "DA_STEER_INGRESS"))
 
 (defn run-id-of [run-dir]
-  (:run-id (clojure.edn/read-string (slurp (str run-dir "/run.edn")))))
+  (:run-id (json/parse-string (slurp (str run-dir "/run.json")) true)))
 
 (defn steer-files
   "All steer files in the run (or just `stage`'s): [{:stage :file :content :answered}]."

@@ -10,12 +10,12 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-const RUN_EDN: &str = "{:run-id \"250718-artifacts\" :phase \"steady-state\"}";
+const RUN_JSON: &str = r#"{"run-id":"250718-artifacts","phase":"steady-state"}"#;
 const FLOW_RON: &str = include_str!("../../../engine/fixtures/minimal-flow.ron");
 
 fn scaffold() -> (TempDir, Flow) {
     let dir: TempDir = TempDir::new().unwrap();
-    fs::write(dir.path().join("run.edn"), RUN_EDN).unwrap();
+    fs::write(dir.path().join("run.json"), RUN_JSON).unwrap();
     fs::write(dir.path().join("flow.ron"), FLOW_RON).unwrap();
     let flow: Flow = load_run_flow(dir.path()).unwrap();
     for (_, stage) in flow.stages() {
@@ -38,7 +38,7 @@ fn paths(files: &[RunArtifact]) -> Vec<&str> {
 fn fresh_run_collects_root_files_only() {
     let (dir, flow): (TempDir, Flow) = scaffold();
     let files: Vec<RunArtifact> = FsArtifactSource.collect(&flow, dir.path()).unwrap();
-    assert_eq!(paths(&files), vec!["run.edn", "flow.ron"]);
+    assert_eq!(paths(&files), vec!["run.json", "flow.ron"]);
 }
 
 // Scenario: one stage output is collected under its stage path
@@ -75,7 +75,7 @@ fn many_outputs_are_collected_and_gitkeep_is_not() {
     assert_eq!(
         collected,
         vec![
-            "run.edn",
+            "run.json",
             "flow.ron",
             "spec.md",
             "stages/01-plan/output/plan.md",
@@ -96,8 +96,8 @@ fn collect_then_materialize_round_trips() {
     let target: TempDir = TempDir::new().unwrap();
     FsArtifactSink.materialize(target.path(), &files).unwrap();
     assert_eq!(
-        fs::read_to_string(target.path().join("run.edn")).unwrap(),
-        RUN_EDN
+        fs::read_to_string(target.path().join("run.json")).unwrap(),
+        RUN_JSON
     );
     assert_eq!(
         fs::read_to_string(target.path().join("stages/01-plan/output/plan.md")).unwrap(),

@@ -30,7 +30,7 @@
 ;;       so the worktree identity — is unchanged; refuses if that is ever untrue.
 ;;   bin/run restore --run-id RUNID [--into DIR]
 ;;       Rebuild a mirrored run on this machine: algorithm contracts from this repo,
-;;       run.edn/flow.ron/spec/stage outputs from the DaRun mirror (needs
+;;       run.json/flow.ron/spec/stage outputs from the DaRun mirror (needs
 ;;       DA_STEER_INGRESS). The worktree is rebuilt from the base commit plus
 ;;       worktree.patch when a clone holding that base is present.
 ;;   bin/run --selftest
@@ -40,7 +40,6 @@
 ;; provenance + traces -> the frozen run record.
 
 (require '[clojure.string :as str]
-         '[clojure.edn :as edn]
          '[babashka.fs :as fs]
          '[babashka.process :as p]
          '[cheshire.core :as json])
@@ -137,6 +136,13 @@
   (println (json/generate-string {:selftest "ok"})))
 
 ;; ---- shell helpers -------------------------------------------------------
+
+(defn run-cfg
+  "The run manifest (run.json) as a keyword map. JSON — not EDN — because
+   every consumer (this script, da-state via serde, a gate shell script)
+   must read the same file with a real parser (ADR-0003)."
+  [run]
+  (json/parse-string (slurp (str run "/run.json")) true))
 
 (defn sh [& args]
   (let [{:keys [out err exit]} (apply p/sh args)]
@@ -295,7 +301,7 @@
    Returns the worktree identity. Idempotent: a clean worktree commits nothing
    and the patch is rewritten unchanged."
   [run label]
-  (let [cfg  (edn/read-string (slurp (str run "/run.edn")))
+  (let [cfg  (run-cfg run)
         wt   (str run "/worktree")
         base (:base-commit cfg)]
     (when-not (fs/directory? wt)
@@ -344,7 +350,7 @@
                          " — the run was never sealed; run `bin/run seal --run " run
                          "` (or the gate, which seals) before squashing")
                     {})))
-  (let [cfg  (edn/read-string (slurp (str run "/run.edn")))
+  (let [cfg  (run-cfg run)
         wt   (str run "/worktree")
         base (:base-commit cfg)
         before (sha256 (slurp (str run "/worktree.patch")))
@@ -368,7 +374,7 @@
 
 (defn record-commit [{:keys [run]}]
   (when-not run (throw (ex-info "record-commit needs --run RUNDIR" {})))
-  (let [cfg  (edn/read-string (slurp (str run "/run.edn")))
+  (let [cfg  (run-cfg run)
         wt   (str run "/worktree")
         base (:base-commit cfg)
         head-r (sh "git" "-C" wt "rev-parse" "HEAD")
@@ -484,12 +490,14 @@
     (fs/copy (str (fs/absolutize spec)) (str run-dir "/spec.md") {:replace-existing true})
     (let [r (sh "git" "-C" project "worktree" "add" "-b" branch wt "HEAD")]
       (when-not (zero? (:exit r)) (throw (ex-info (str "git worktree add failed: " (:err r)) {}))))
-    (spit (str run-dir "/run.edn")
-          (pr-str {:run-id rid :project project :branch branch :base-commit base
-                   :algorithm-version algver :flow flow-name
-                   :contracts (flow-files flow-dir)
-                   :spec (str (fs/absolutize spec)) :arm arm :round round :phase phase
-                   :created (str (java.time.Instant/ofEpochMilli millis))}))
+    (spit (str run-dir "/run.json")
+          (json/generate-string
+           {:run-id rid :project project :branch branch :base-commit base
+            :algorithm-version algver :flow flow-name
+            :contracts (flow-files flow-dir)
+            :spec (str (fs/absolutize spec)) :arm arm :round round :phase phase
+            :created (str (java.time.Instant/ofEpochMilli millis))}
+           {:pretty true}))
     (log-event! run-dir "setup")
     (println (json/generate-string
               {:run-id rid :run-dir run-dir :worktree wt :branch branch
@@ -534,7 +542,7 @@
 
 (defn capture [{:keys [run round]}]
   (when-not run (throw (ex-info "capture needs --run RUNDIR" {})))
-  (let [cfg     (edn/read-string (slurp (str run "/run.edn")))
+  (let [cfg     (run-cfg run)
         round   (or round (:round cfg))
         rid     (:run-id cfg)
         wt      (str run "/worktree")
@@ -607,7 +615,7 @@
   (let [run-root (or (System/getenv "DA_RUN_ROOT")
                      (str (fs/home) "/.cache/directory-algorithm/runs"))
         run-dir (str (or into (str run-root "/" run-id)))]
-    (when (fs/exists? (str run-dir "/run.edn"))
+    (when (fs/exists? (str run-dir "/run.json"))
       (throw (ex-info (str run-dir " already holds a run — refusing to overwrite") {})))
     ;; The mirror comes first — it alone knows which flow built this run — and
     ;; it stays authoritative. The flow then fills in only what the mirror does
@@ -617,7 +625,7 @@
       (when-not (zero? (:exit r))
         (throw (ex-info (str "state restore failed:\n" (:out r)
                              (when (seq (:err r)) (str "\n" (:err r)))) {}))))
-    (let [named (:flow (edn/read-string (slurp (str run-dir "/run.edn"))))
+    (let [named (:flow (run-cfg run-dir))
           flow-dir (resolve-flow (or flow named))]
       (copy-missing! flow-dir run-dir)
       (let [gate-dir (:dir (gate-stage (run-flow run-dir)))
@@ -628,7 +636,7 @@
     ;; The code comes back from worktree.patch, not from the origin host's
     ;; branch: that branch is never pushed, so it does not exist here. The
     ;; patch is base-relative, so any clone holding the base commit will do.
-    (let [cfg     (edn/read-string (slurp (str run-dir "/run.edn")))
+    (let [cfg     (run-cfg run-dir)
           project (:project cfg)
           wt      (str run-dir "/worktree")
           patch   (str run-dir "/worktree.patch")

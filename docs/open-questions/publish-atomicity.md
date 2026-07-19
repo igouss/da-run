@@ -23,7 +23,7 @@ artifacts do not support.
 3. The mirror holds `gated-green` alongside the *previous* stage's artifacts — no
    `gate-report.md`, and a `worktree.patch` from before the gate ran.
 
-A restore from that mirror produces a run dir whose `run.edn`-derived state and whose files
+A restore from that mirror produces a run dir whose `run.json`-derived state and whose files
 disagree. Because state is re-derived from the filesystem on restore, the mismatch usually
 self-corrects into "less complete than the mirror claimed" rather than something dangerous —
 but the mirror's own view is wrong in the meantime, and anything reading mirror state directly

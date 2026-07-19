@@ -10,14 +10,14 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-const RUN_EDN: &str = "{:run-id \"250718-fixture\"\n :arm \"pre\"\n :phase \"steady-state\"\n :target {:project \"/p\"}}";
+const RUN_JSON: &str = r#"{"run-id":"250718-fixture","arm":"pre","phase":"steady-state","target":{"project":"/p"}}"#;
 
 /// The canonical flow — the adapter must read exactly what bin/run copies.
 const FLOW_RON: &str = include_str!("../../../engine/fixtures/minimal-flow.ron");
 
 fn scaffold_run_dir() -> (TempDir, Flow) {
     let dir: TempDir = TempDir::new().unwrap();
-    fs::write(dir.path().join("run.edn"), RUN_EDN).unwrap();
+    fs::write(dir.path().join("run.json"), RUN_JSON).unwrap();
     fs::write(dir.path().join("flow.ron"), FLOW_RON).unwrap();
     let flow: Flow = load_run_flow(dir.path()).unwrap();
     for (_, stage) in flow.stages() {
@@ -181,7 +181,7 @@ fn commit_output_alone_is_not_commit_recorded() {
 
 // Scenario: not a run dir
 #[test]
-fn missing_run_edn_is_not_a_run_dir() {
+fn missing_run_json_is_not_a_run_dir() {
     let (_, flow): (TempDir, Flow) = scaffold_run_dir();
     let bare: TempDir = TempDir::new().unwrap();
     assert!(matches!(
@@ -190,13 +190,13 @@ fn missing_run_edn_is_not_a_run_dir() {
     ));
 }
 
-// Scenario: a malformed run.edn is refused loudly
+// Scenario: a malformed run.json is refused loudly
 #[test]
 fn unknown_phase_is_malformed() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
     fs::write(
-        dir.path().join("run.edn"),
-        "{:run-id \"r1\" :phase \"warp-speed\"}",
+        dir.path().join("run.json"),
+        r#"{"run-id":"r1","phase":"warp-speed"}"#,
     )
     .unwrap();
     assert!(matches!(
@@ -208,7 +208,22 @@ fn unknown_phase_is_malformed() {
 #[test]
 fn missing_run_id_is_malformed() {
     let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
-    fs::write(dir.path().join("run.edn"), "{:phase \"steady-state\"}").unwrap();
+    fs::write(dir.path().join("run.json"), r#"{"phase":"steady-state"}"#).unwrap();
+    assert!(matches!(
+        snapshot(&dir, &flow),
+        Err(SnapshotError::Malformed { .. })
+    ));
+}
+
+// Scenario: an EDN-era manifest (or any non-JSON text) is refused loudly
+#[test]
+fn edn_manifest_is_malformed() {
+    let (dir, flow): (TempDir, Flow) = scaffold_run_dir();
+    fs::write(
+        dir.path().join("run.json"),
+        "{:run-id \"r1\" :phase \"steady-state\"}",
+    )
+    .unwrap();
     assert!(matches!(
         snapshot(&dir, &flow),
         Err(SnapshotError::Malformed { .. })
@@ -220,7 +235,7 @@ fn missing_run_id_is_malformed() {
 fn missing_output_dir_is_empty_stage() {
     let (_, flow): (TempDir, Flow) = scaffold_run_dir();
     let dir: TempDir = TempDir::new().unwrap();
-    fs::write(dir.path().join("run.edn"), RUN_EDN).unwrap();
+    fs::write(dir.path().join("run.json"), RUN_JSON).unwrap();
     let facts: FsFacts = snapshot(&dir, &flow).unwrap();
     assert!(!facts.stages.get(stage_ref(&flow, "plan")).has_output());
 }

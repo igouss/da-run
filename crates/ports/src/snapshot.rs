@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum SnapshotError {
-    #[error("{path}: not a run dir (no run.edn)")]
+    #[error("{path}: not a run dir (no run.json)")]
     NotARunDir { path: PathBuf },
     #[error("{path}: {detail}")]
     Malformed { path: PathBuf, detail: String },

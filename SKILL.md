@@ -41,10 +41,10 @@ on first use.
 ## Step 1 — resolve the run instance
 
 A stage always executes inside a run instance (the folder holding `CLAUDE.md`, `stages/`,
-`worktree/`, `run.edn`, `spec.md`). Resolve it in this order:
+`worktree/`, `run.json`, `spec.md`). Resolve it in this order:
 
-1. `--run RUNDIR` given → use it. Verify `RUNDIR/run.edn` exists; refuse if not.
-2. The cwd contains `run.edn` → the cwd is the run instance.
+1. `--run RUNDIR` given → use it. Verify `RUNDIR/run.json` exists; refuse if not.
+2. The cwd contains `run.json` → the cwd is the run instance.
 3. Otherwise **create one**: the target project is `--project P` if given, else the cwd (it must
    be a git repo with a clean working tree — the driver refuses a dirty one; relay its message).
 
@@ -54,7 +54,7 @@ A stage always executes inside a run instance (the folder holding `CLAUDE.md`, `
 
    Add `--flow <name>` to drive a pipeline other than the default `rust-factory` (a name under
    `$SKILL_DIR/flows/`, or an absolute path to a flow dir). The run dir is flattened from the
-   flow, so its shape is the same whichever flow built it; `run.edn` records which one did.
+   flow, so its shape is the same whichever flow built it; `run.json` records which one did.
 
    Parse `run-dir` from its JSON output — that is the run instance. Its worktree is
    `<run-dir>/worktree`. (Run root: `$DA_RUN_ROOT`, else `~/.cache/directory-algorithm/runs`.)

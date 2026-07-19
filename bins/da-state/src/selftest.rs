@@ -128,12 +128,12 @@ fn exit_of_refusal(refusal: &Refusal) -> u8 {
     }
 }
 
-/// Write run.edn + the fixture flow.ron, create every stage output dir,
+/// Write run.json + the fixture flow.ron, create every stage output dir,
 /// and load the flow back — the same validation path real commands take.
 fn scaffold(run_dir: &Path) -> Result<Flow, String> {
     fs::write(
-        run_dir.join("run.edn"),
-        "{:run-id \"selftest\" :phase \"steady-state\"}",
+        run_dir.join("run.json"),
+        r#"{"run-id":"selftest","phase":"steady-state"}"#,
     )
     .map_err(|error: std::io::Error| error.to_string())?;
     fs::write(run_dir.join("flow.ron"), FIXTURE_FLOW)

@@ -3,7 +3,7 @@ use crate::phase::Phase;
 use crate::verdict::Verdict;
 use crate::worktree::{WorktreeFacts, WorktreeId};
 
-/// A run's identifier from `run.edn` `:run-id`. Never blank, and constrained
+/// A run's identifier from `run.json` `"run-id"`. Never blank, and constrained
 /// to `[A-Za-z0-9._-]` — the id travels raw into mirror URLs and workflow
 /// keys, so the character set is part of the contract, not a formatting nicety.
 #[derive(Clone, Debug, PartialEq, Eq)]

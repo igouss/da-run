@@ -1,5 +1,5 @@
 use crate::gate_report::{gate_verdict, gate_worktree};
-use crate::run_edn::{EdnFacts, extract_edn_facts, parse_phase};
+use crate::run_json::{ManifestFacts, parse_manifest, parse_phase};
 use crate::steer_file::steer_answered;
 use crate::worktree_patch::{WORKTREE_PATCH, worktree_facts};
 use da_domain::{
@@ -14,22 +14,28 @@ const GITKEEP: &str = ".gitkeep";
 const STEER_FILE: &str = "STEER-REQUEST.md";
 /// The orchestrator-verified commit marker (`bin/run record-commit`).
 pub const COMMIT_VERIFIED: &str = "commit-verified";
+/// The run manifest `bin/run setup` writes — its presence defines a run dir.
+pub const RUN_MANIFEST: &str = "run.json";
 
 /// Reads a run dir (as laid out by `bin/run setup`) into [`FsFacts`].
 pub struct FsSnapshotSource;
 
 impl SnapshotSource for FsSnapshotSource {
     fn snapshot(&self, flow: &Flow, run_dir: &Path) -> Result<FsFacts, SnapshotError> {
-        let edn_path: PathBuf = run_dir.join("run.edn");
-        if !edn_path.is_file() {
+        let manifest_path: PathBuf = run_dir.join(RUN_MANIFEST);
+        if !manifest_path.is_file() {
             return Err(SnapshotError::NotARunDir {
                 path: run_dir.to_path_buf(),
             });
         }
-        let edn_text: String = read_file(&edn_path)?;
-        let edn: EdnFacts = extract_edn_facts(&edn_text);
-        let run_id: RunId = refine_run_id(&edn_path, edn.run_id.as_deref())?;
-        let phase: Phase = refine_phase(&edn_path, edn.phase.as_deref())?;
+        let manifest_text: String = read_file(&manifest_path)?;
+        let manifest: ManifestFacts =
+            parse_manifest(&manifest_text).map_err(|detail: String| SnapshotError::Malformed {
+                path: manifest_path.clone(),
+                detail,
+            })?;
+        let run_id: RunId = refine_run_id(&manifest_path, manifest.run_id.as_deref())?;
+        let phase: Phase = refine_phase(&manifest_path, manifest.phase.as_deref())?;
 
         let mut stage_facts: Vec<StageFacts> = Vec::new();
         for (_, stage) in flow.stages() {
@@ -116,22 +122,22 @@ fn read_worktree(run_dir: &Path) -> Result<Option<WorktreeFacts>, SnapshotError>
     Ok(worktree_facts(&read_file(&patch_path)?))
 }
 
-fn refine_run_id(edn_path: &Path, raw: Option<&str>) -> Result<RunId, SnapshotError> {
+fn refine_run_id(manifest_path: &Path, raw: Option<&str>) -> Result<RunId, SnapshotError> {
     let raw: &str = raw.ok_or_else(|| SnapshotError::Malformed {
-        path: edn_path.to_path_buf(),
-        detail: "run.edn has no :run-id".to_string(),
+        path: manifest_path.to_path_buf(),
+        detail: "run.json has no \"run-id\"".to_string(),
     })?;
     RunId::new(raw).map_err(|error: da_domain::RunIdError| SnapshotError::Malformed {
-        path: edn_path.to_path_buf(),
-        detail: format!("run.edn :run-id refused: {error}"),
+        path: manifest_path.to_path_buf(),
+        detail: format!("run.json \"run-id\" refused: {error}"),
     })
 }
 
-fn refine_phase(edn_path: &Path, raw: Option<&str>) -> Result<Phase, SnapshotError> {
+fn refine_phase(manifest_path: &Path, raw: Option<&str>) -> Result<Phase, SnapshotError> {
     parse_phase(raw).ok_or_else(|| SnapshotError::Malformed {
-        path: edn_path.to_path_buf(),
+        path: manifest_path.to_path_buf(),
         detail: format!(
-            "run.edn :phase {:?} is neither convergence nor steady-state",
+            "run.json \"phase\" {:?} is neither convergence nor steady-state",
             raw
         ),
     })

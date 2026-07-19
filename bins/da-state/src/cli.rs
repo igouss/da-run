@@ -38,7 +38,7 @@ pub enum Command {
     },
     /// Materialize a mirrored run's artifacts into a directory — the
     /// restart-on-another-host path (needs DA_STEER_INGRESS). The worktree is
-    /// not restored: recreate it from run.edn's project/branch/base-commit.
+    /// not restored: recreate it from run.json's project/branch/base-commit.
     Restore {
         #[arg(long = "run-id")]
         run_id: String,

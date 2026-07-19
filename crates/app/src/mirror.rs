@@ -64,7 +64,7 @@ pub struct Restored {
 
 /// Fetch a run's mirror snapshot and materialize its artifacts into
 /// `run_dir` — the restart-on-another-host path. The worktree is NOT
-/// restored: recreate it from run.edn's project/branch/base-commit.
+/// restored: recreate it from run.json's project/branch/base-commit.
 pub fn restore_run<M: RunMirror, K: ArtifactSink>(
     mirror: &M,
     sink: &K,

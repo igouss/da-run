@@ -171,7 +171,7 @@ fn run_notify(flow: &Flow, run_dir: &Path) -> Outcome {
 }
 
 /// Restore a mirrored run's artifacts into a directory. Refuses to overwrite
-/// an existing run (a run.edn already present in the target).
+/// an existing run (a run.json already present in the target).
 fn run_restore(run_id: &str, into: &Path) -> Outcome {
     let Ok(run_id) = RunId::new(run_id) else {
         return usage_failure("restore needs a non-blank --run-id");
@@ -179,8 +179,8 @@ fn run_restore(run_id: &str, into: &Path) -> Outcome {
     let Some(ingress) = std::env::var("DA_STEER_INGRESS").ok() else {
         return usage_failure("restore needs DA_STEER_INGRESS (the mirror holds the artifacts)");
     };
-    if into.join("run.edn").is_file() {
-        return usage_failure("target already holds a run.edn — refusing to overwrite a run");
+    if into.join("run.json").is_file() {
+        return usage_failure("target already holds a run.json — refusing to overwrite a run");
     }
     let mirror: RestateIngressMirror = RestateIngressMirror {
         ingress,
@@ -198,7 +198,7 @@ fn run_restore(run_id: &str, into: &Path) -> Outcome {
                     "state": restored
                         .state_json
                         .and_then(|raw: String| serde_json::from_str::<serde_json::Value>(&raw).ok()),
-                    "note": "worktree not restored — recreate from run.edn's project/branch/base-commit",
+                    "note": "worktree not restored — recreate from run.json's project/branch/base-commit",
                 })
                 .to_string(),
                 pretty: None,
