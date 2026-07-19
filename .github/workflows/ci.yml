@@ -1,0 +1,58 @@
+# CI — every verifier the repo owns, on every push and PR. The project's
+# founding bug was a broken selftest no CI ever ran; this workflow is the
+# structural fix: green here means every suite actually executed.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  rust:
+    name: cargo test + clippy + da-state selftest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test
+        run: cargo test --workspace
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: da-state selftest
+        run: cargo run --release -p da-state -- selftest
+
+  engine:
+    name: babashka selftests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: turtlequeue/setup-babashka@v1.7.2
+        with:
+          babashka-version: 1.12.208
+      - name: bin/run selftest
+        run: bb engine/bin/run --selftest
+      - name: bin/steer selftest
+        run: bb engine/bin/steer --selftest
+      - name: bin/workspace-lint selftest
+        run: bb engine/bin/workspace-lint --selftest
+
+  service:
+    name: da-steer typecheck + test + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/da-steer
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: services/da-steer/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
