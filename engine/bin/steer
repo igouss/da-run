@@ -38,18 +38,42 @@
   (not (str/blank? (or (section content "Answer") ""))))
 
 (defn with-answer
-  "Write `answer` into the ## Answer section (replacing whatever was there)."
+  "Write `answer` into the ## Answer section (replacing whatever was there).
+   The answer is quoted for the replacement — a `$` or `\\` in the operator's
+   text is content, not a capture-group reference."
   [content answer]
   (if (re-find #"(?m)^## Answer[ \t]*$" (or content ""))
-    (str/replace content #"(?ms)(^## Answer[ \t]*$).*?(?=^## |\z)" (str "$1\n\n" answer "\n"))
+    (str/replace content #"(?ms)(^## Answer[ \t]*$).*?(?=^## |\z)"
+                 (str "$1\n\n" (str/re-quote-replacement answer) "\n"))
     (str content "\n## Answer\n\n" answer "\n")))
 
 (defn steer-rel-path [stage] (str "stages/" stage "/output/STEER-REQUEST.md"))
 
+(defn steer-fingerprint
+  "8 hex chars of sha256 over the question, options, and Round line — the
+   parts that make a steer THIS ask. The ## Answer section is excluded, so
+   park and resolve derive the same key before and after answering."
+  [content]
+  (let [basis (str (section content "Question") "\n"
+                   (section content "Options") "\n"
+                   (or (re-find #"(?m)^Round:.*$" (or content "")) ""))
+        digest (java.security.MessageDigest/getInstance "SHA-256")]
+    (->> (.digest digest (.getBytes basis "UTF-8"))
+         (take 4)
+         (map #(format "%02x" %))
+         (apply str))))
+
 (defn wf-key
-  "Restate workflow key for one steer: run-id + stage, sanitized for a URL path."
-  [run-id stage]
-  (str/replace (str run-id "--" stage) #"[^A-Za-z0-9_-]" "-"))
+  "Restate workflow key for one steer: run-id + stage + content fingerprint,
+   sanitized for a URL path. The fingerprint is the D2 defense: a Restate
+   workflow runs once per key, so keying on (run, stage) alone let a second
+   steer from the same stage read the FIRST steer's completed output as if
+   the operator had answered it. With the question in the key, a new ask is
+   always a new workflow; only the byte-identical question replays — and
+   that replay is the memoized answer to exactly that question."
+  [run-id stage content]
+  (str/replace (str run-id "--" stage "--" (steer-fingerprint content))
+               #"[^A-Za-z0-9_-]" "-"))
 
 (defn start-payload [run-id stage content file]
   {:runId run-id :stage stage
@@ -131,10 +155,24 @@
   (let [c "## Answer\n\n\n## Later\n\nkeep"]
     (assert (str/includes? (with-answer c "a") "## Later"))
     (assert (str/includes? (with-answer c "a") "keep")))
+  ;; with-answer must not interpret $ or \ in the operator's text (regex
+  ;; replacement metacharacters) — the answer is content, verbatim
+  (assert (str/includes? (with-answer sample "costs $1 and \\ escapes") "costs $1 and \\ escapes"))
   (assert (= "stages/02-tests/output/STEER-REQUEST.md" (steer-rel-path "02-tests")))
-  ;; wf-key sanitizes; deterministic
-  (assert (= "123-proj--02-tests" (wf-key "123-proj" "02-tests")))
-  (assert (= "a-b--01-design" (wf-key "a/b" "01-design")))
+  ;; wf-key: deterministic, sanitized, and CONTENT-KEYED — the D2 defense:
+  ;; same question -> same key (idempotent re-park), different question ->
+  ;; different key (a completed old park can never answer a new ask),
+  ;; same question at a different Round -> different key
+  (assert (= (wf-key "123-proj" "02-tests" sample) (wf-key "123-proj" "02-tests" sample)))
+  (assert (re-matches #"123-proj--02-tests--[0-9a-f]{8}" (wf-key "123-proj" "02-tests" sample)))
+  (assert (not= (wf-key "r" "02-tests" sample)
+                (wf-key "r" "02-tests" (str/replace sample "Which port?" "Which host?"))))
+  (assert (not= (wf-key "r" "02-tests" sample)
+                (wf-key "r" "02-tests" (str "Round: 2\n" sample))))
+  ;; answering must NOT move the key — resolve derives the same key park used
+  (assert (= (wf-key "r" "02-tests" sample)
+             (wf-key "r" "02-tests" (with-answer sample "use 9080"))))
+  (assert (str/starts-with? (wf-key "a/b" "01-design" sample) "a-b--01-design--"))
   (let [pl (start-payload "r1" "02-tests" sample "/x/STEER-REQUEST.md")]
     (assert (= "Which port?" (:question pl)))
     (assert (= "r1" (:runId pl))))
@@ -187,7 +225,7 @@
 (defn restate-start!
   "Idempotently start the DaSteer workflow for one steer; return its key."
   [run-dir {:keys [stage content file]}]
-  (let [key (wf-key (run-id-of run-dir) stage)]
+  (let [key (wf-key (run-id-of run-dir) stage content)]
     (curl! (start-cmd (ca-path) (ingress) key (start-payload (run-id-of run-dir) stage content file)))
     key))
 
@@ -226,7 +264,11 @@
     (when key (println (str "  parked durably: DaSteer/" key " (answer in the file, via "
                             "`bin/steer resolve`, or in the Restate UI)")))
     (loop []
-      (let [c (slurp file)]
+      (let [c (try (slurp file)
+                   (catch java.io.FileNotFoundException _
+                     (throw (ex-info (str "steer file vanished mid-park: " file
+                                          " — was the run dir moved or the request retracted?")
+                                     {:file file}))))]
         (cond
           (answered? c)
           (let [ans (section c "Answer")]
@@ -251,8 +293,9 @@
   (when-not (and run stage answer) (throw (ex-info "resolve needs --run --stage --answer" {})))
   (let [f (str run "/" (steer-rel-path stage))]
     (when-not (fs/exists? f) (throw (ex-info (str "no steer-request at " f) {})))
-    (spit f (with-answer (slurp f) answer))
-    (when (ingress) (restate-resolve! (wf-key (run-id-of run) stage) answer))
+    (let [before (slurp f)]  ; key from the pre-answer content — fingerprint ignores ## Answer
+      (spit f (with-answer before answer))
+      (when (ingress) (restate-resolve! (wf-key (run-id-of run) stage before) answer)))
     (println (json/generate-string {:resolved stage :file f}))))
 
 ;; ---- dispatch ------------------------------------------------------------
