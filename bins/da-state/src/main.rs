@@ -5,12 +5,8 @@
 //! 0 allowed/ok, 2 usage or broken run dir, 3 steer pending, 4 ordering
 //! violation.
 
-mod cli;
-mod exec;
-mod pretty;
-mod selftest;
-
 use clap::Parser;
+use da_state::{cli, exec};
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
