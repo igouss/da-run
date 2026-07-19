@@ -114,9 +114,9 @@ fn refine_run_id(edn_path: &Path, raw: Option<&str>) -> Result<RunId, SnapshotEr
         path: edn_path.to_path_buf(),
         detail: "run.edn has no :run-id".to_string(),
     })?;
-    RunId::new(raw).map_err(|_blank: da_domain::BlankRunId| SnapshotError::Malformed {
+    RunId::new(raw).map_err(|error: da_domain::RunIdError| SnapshotError::Malformed {
         path: edn_path.to_path_buf(),
-        detail: "run.edn :run-id is blank".to_string(),
+        detail: format!("run.edn :run-id refused: {error}"),
     })
 }
 

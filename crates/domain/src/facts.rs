@@ -3,22 +3,36 @@ use crate::phase::Phase;
 use crate::verdict::Verdict;
 use crate::worktree::{WorktreeFacts, WorktreeId};
 
-/// A run's identifier from `run.edn` `:run-id`. Never blank.
+/// A run's identifier from `run.edn` `:run-id`. Never blank, and constrained
+/// to `[A-Za-z0-9._-]` — the id travels raw into mirror URLs and workflow
+/// keys, so the character set is part of the contract, not a formatting nicety.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RunId(String);
 
-/// Refused construction of a blank [`RunId`].
+/// Refused construction of an invalid [`RunId`].
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("a run id must hold real text")]
-pub struct BlankRunId;
+pub enum RunIdError {
+    #[error("a run id must hold real text")]
+    Blank,
+    #[error("a run id may only hold [A-Za-z0-9._-]; {id:?} holds {offender:?}")]
+    ForbiddenCharacter { id: String, offender: char },
+}
 
 impl RunId {
-    pub fn new(raw: &str) -> Result<RunId, BlankRunId> {
+    pub fn new(raw: &str) -> Result<RunId, RunIdError> {
         let trimmed: &str = raw.trim();
         if trimmed.is_empty() {
-            Err(BlankRunId)
-        } else {
-            Ok(RunId(trimmed.to_string()))
+            return Err(RunIdError::Blank);
+        }
+        let offender: Option<char> = trimmed
+            .chars()
+            .find(|c: &char| !(c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-')));
+        match offender {
+            Some(offender) => Err(RunIdError::ForbiddenCharacter {
+                id: trimmed.to_string(),
+                offender,
+            }),
+            None => Ok(RunId(trimmed.to_string())),
         }
     }
 

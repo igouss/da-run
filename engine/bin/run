@@ -52,7 +52,23 @@
   [path]
   (str/replace (str path) #"[^A-Za-z0-9]" "-"))
 
-(defn run-id [project-name millis] (str millis "-" project-name))
+(defn safe-project-name
+  "Project dir names travel into run ids, branch names, and mirror URLs —
+   squeeze anything outside the RunId charset [A-Za-z0-9._-] to a hyphen."
+  [pname]
+  (-> (str pname)
+      (str/replace #"[^A-Za-z0-9._-]" "-")
+      (str/replace #"-{2,}" "-")
+      (str/replace #"^-|-$" "")))
+
+(defn run-id
+  "<millis>-<project>-<suffix>: the suffix (4 random hex chars at setup)
+   keeps two setups of the same project in the same millisecond from
+   colliding on run dir, branch, and mirror key at once."
+  [project-name millis suffix]
+  (str millis "-" (safe-project-name project-name) "-" suffix))
+
+(defn fresh-suffix [] (format "%04x" (rand-int 65536)))
 
 (defn branch-name [rid] (str "da/" rid))
 
@@ -94,8 +110,10 @@
 
 (defn selftest []
   (assert (= "-tmp-run-1" (munge-cwd "/tmp/run 1")))
-  (assert (= "123-proj" (run-id "proj" 123)))
-  (assert (= "da/123-proj" (branch-name (run-id "proj" 123))))
+  (assert (= "123-proj-beef" (run-id "proj" 123 "beef")))
+  (assert (= "123-my-proj-beef" (run-id "my proj!" 123 "beef")))  ; charset squeezed
+  (assert (= "da/123-proj-beef" (branch-name (run-id "proj" 123 "beef"))))
+  (assert (re-matches #"[0-9a-f]{4}" (fresh-suffix)))
   (assert (not (working-tree-dirty? "")))               ; zero changes -> clean
   (assert (working-tree-dirty? " M Cargo.toml"))        ; one change   -> dirty
   (assert (working-tree-dirty? " M a\n?? b/\n M c"))     ; many changes -> dirty
@@ -304,7 +322,7 @@
         phase   (or phase "steady-state")
         pname   (str (fs/file-name project))
         millis  (System/currentTimeMillis)
-        rid     (run-id pname millis)
+        rid     (run-id pname millis (fresh-suffix))
         branch  (branch-name rid)
         run-root (or (System/getenv "DA_RUN_ROOT")
                      (str (fs/home) "/.cache/directory-algorithm/runs"))

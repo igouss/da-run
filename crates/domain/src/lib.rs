@@ -26,7 +26,7 @@ mod worktree;
 
 pub use anomaly::Anomaly;
 pub use derive::{Derived, derive};
-pub use facts::{BlankRunId, FsFacts, RunId, StageFacts, StageFactsMap, SteerFacts};
+pub use facts::{FsFacts, RunId, RunIdError, StageFacts, StageFactsMap, SteerFacts};
 pub use flow::{
     AdviseRule, AdviseRuleSpec, BlockRule, BlockRuleSpec, DispatchDef, DispatchRef, DispatchSpec,
     Flow, FlowError, FlowSpec, Role, RoleSpec, StageDef, StageRef, StageSpec,
