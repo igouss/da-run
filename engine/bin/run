@@ -700,6 +700,20 @@
                        (zero? (:exit (sh "git" "-C" project "cat-file" "-e"
                                          (str base "^{commit}")))))
           rebuilt (when have?
+                    ;; Same-host restore: the run's branch may still exist in
+                    ;; the clone (the run dir was lost, the project was not).
+                    ;; The mirror's truth is base + worktree.patch, so a
+                    ;; leftover branch is stale by definition — but deleting
+                    ;; someone's branch is not this tool's call. Refuse with
+                    ;; the resolution instead of a raw git error.
+                    (when (zero? (:exit (sh "git" "-C" project "rev-parse" "--verify" "--quiet"
+                                            (str "refs/heads/" (:branch cfg)))))
+                      (throw (ex-info (str "branch " (:branch cfg) " already exists in " project
+                                           " — this run (or its worktree) is still registered there."
+                                           " If the old run is truly gone, remove them first:\n"
+                                           "  git -C " project " worktree prune\n"
+                                           "  git -C " project " branch -D " (:branch cfg)
+                                           "\nthen re-run restore.") {})))
                     (let [w (sh "git" "-C" project "worktree" "add" "-b" (:branch cfg) wt base)]
                       (when-not (zero? (:exit w))
                         (throw (ex-info (str "git worktree add failed: " (:err w)) {})))

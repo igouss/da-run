@@ -1,0 +1,105 @@
+#!/usr/bin/env bb
+;; restore-check — end-to-end verification of the mirror round trip against a
+;; LIVE DaRun mirror: setup a scratch run, do stage work, seal (which
+;; publishes), restore the run-id into a fresh dir, and prove the restored
+;; run derives IDENTICALLY and its worktree rebuilds to the same content
+;; identity. This is the "did the wire change break restore?" alarm — run it
+;; after any change to the snapshot protocol, the artifact set, or the run
+;; manifest format.
+;;
+;;   DA_STEER_INGRESS=https://restate-ingress.homelab bin/restore-check
+;;
+;; Exit 0 with {"restore-check":"ok",...} — anything else is a failure.
+;; Needs: git, cargo (or a prebuilt target/release/da-state), a reachable
+;; mirror. Everything happens under a fresh temp dir, removed on success and
+;; kept (with its path printed) on failure for inspection.
+
+(require '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[cheshire.core :as json])
+
+(defn sh! [msg & args]
+  (let [{:keys [out err exit]} (apply p/sh args)]
+    (when-not (zero? exit)
+      (throw (ex-info (str msg " (exit " exit "): " (str/trim (str out "\n" err))) {})))
+    (str/trim (or out ""))))
+
+(defn engine-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
+
+(defn state-cmd [] (str (engine-root) "/bin/state"))
+(defn run-cmd [] (str (engine-root) "/bin/run"))
+
+(defn last-json-line
+  "Engine commands print human lines then one JSON result line — take it."
+  [out]
+  (json/parse-string (last (remove str/blank? (str/split-lines out))) true))
+
+(when-not (System/getenv "DA_STEER_INGRESS")
+  (binding [*out* *err*]
+    (println "error: restore-check needs DA_STEER_INGRESS — it verifies the LIVE mirror round trip"))
+  (System/exit 2))
+
+(let [work (str (fs/create-temp-dir {:prefix "da-restore-check"}))
+      project (str work "/project")
+      spec (str work "/spec.md")]
+  (try
+    ;; A scratch target project with one commit — the run's base.
+    (fs/create-dirs project)
+    (sh! "git init" "git" "-C" project "init" "-q")
+    (sh! "git config email" "git" "-C" project "config" "user.email" "restore-check@da")
+    (sh! "git config name" "git" "-C" project "config" "user.name" "restore-check")
+    (spit (str project "/lib.rs") "pub fn answer() -> u32 { 41 }\n")
+    (sh! "git add" "git" "-C" project "add" "-A")
+    (sh! "git commit" "git" "-C" project "commit" "-qm" "init")
+    (spit spec "# restore-check scratch spec\n")
+
+    ;; Setup, stage work in BOTH surfaces (an output file and a worktree
+    ;; edit), then seal — sealing publishes the snapshot to the mirror.
+    (let [setup (last-json-line
+                 (sh! "run setup" (run-cmd) "setup" "--project" project "--spec" spec
+                      {:extra-env {"DA_RUN_ROOT" (str work "/runs")}}))
+          _ (when-not (:run-dir setup) (throw (ex-info (str "setup gave no run-dir: " setup) {})))
+          run-dir (:run-dir setup)
+          run-id (:run-id setup)]
+      (spit (str run-dir "/stages/01-design/output/design.md") "# scratch design\n")
+      (spit (str run-dir "/worktree/lib.rs") "pub fn answer() -> u32 { 42 }\n")
+      (let [sealed (last-json-line (sh! "run seal" (run-cmd) "seal" "--run" run-dir "--stage" "restore-check"))
+            source-id (:worktree-id sealed)
+            source-derived (sh! "derive source" (state-cmd) "derive" "--run" run-dir)
+            ;; Simulate the restore scenario: the run dir (worktree included)
+            ;; is LOST, the project clone survives. Everything about the run
+            ;; must now come back from the mirror.
+            branch (:branch setup)
+            _ (fs/delete-tree run-dir)
+            _ (sh! "git worktree prune" "git" "-C" project "worktree" "prune")
+            _ (sh! "git branch -D" "git" "-C" project "branch" "-D" branch)
+            restored-dir (str work "/restored")
+            restored (last-json-line
+                      (sh! "run restore" (run-cmd) "restore" "--run-id" run-id "--into" restored-dir))
+            restored-derived (sh! "derive restored" (state-cmd) "derive" "--run" restored-dir)
+            restored-patch-id (str/trim (sh! "sha restored patch" "sha256sum" (str restored-dir "/worktree.patch")))]
+        (when-not (:worktree-restored restored)
+          (throw (ex-info (str "worktree not rebuilt: " restored) {})))
+        ;; The law: the restored run IS the run — same derived state, same
+        ;; worktree content identity, and the rebuilt worktree carries the edit.
+        (when-not (= source-derived restored-derived)
+          (throw (ex-info (str "derived state diverged\n source:   " source-derived
+                               "\n restored: " restored-derived) {})))
+        (when-not (= source-id (first (str/split restored-patch-id #"\s+")))
+          (throw (ex-info (str "worktree identity diverged: sealed " source-id
+                               " vs restored patch " restored-patch-id) {})))
+        (when-not (str/includes? (slurp (str restored-dir "/worktree/lib.rs")) "42")
+          (throw (ex-info "rebuilt worktree lost the stage's edit" {})))
+        ;; Cleanup: the restored dir borrowed a worktree registration in the
+        ;; scratch project's git; everything lives under `work`, so one delete.
+        (fs/delete-tree work)
+        (println (json/generate-string
+                  {:restore-check "ok" :run-id run-id
+                   :worktree-id source-id
+                   :derived-identical true :worktree-rebuilt true}))))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "error:" (ex-message e))
+        (println "scratch kept for inspection:" work))
+      (System/exit 1))))

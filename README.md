@@ -140,6 +140,9 @@ Anything on the tailnet can read run status without touching the run dir, and a 
 can be rebuilt on another machine with `bin/run restore --run-id <id>` (the worktree is
 recreated from the target project's git, per run.json). Deploying this repo's service replaces
 the old two-handler protocol — re-register the endpoint with Restate after the first deploy.
+`bin/restore-check` proves the whole round trip against the LIVE mirror (scratch run → seal →
+restore → identical derive + worktree identity) — run it after any change to the snapshot
+protocol, artifact set, or manifest format.
 
 Every run also journals its own observability (`events.jsonl`): dispatch marks, gate colors,
 and a fingerprint of the operator-editable surface at each engine touchpoint, so `capture`
@@ -191,6 +194,7 @@ da-run/
   SKILL.md              the skill (Claude Code reads this)
   engine/               the machine — reusable across every flow
     bin/run                 run driver (setup / seal / gate / squash / capture / restore)
+    bin/restore-check       live end-to-end mirror round-trip verification
     bin/state               run-state authority wrapper (builds/execs da-state)
     bin/steer               steer-request protocol
     bin/workspace-lint       fitness functions incl. stages/ <-> flow.ron consistency
