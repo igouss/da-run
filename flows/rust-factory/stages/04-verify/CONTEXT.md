@@ -32,11 +32,12 @@ The gate. The deterministic edge: the change ships only if this goes green.
 | the gate report | `output/gate-report.md` | the gate's verbatim stdout+stderr and its exit code |
 | the adversarial review | `output/adversarial-review.md` | one verdict per Gherkin scenario (violated/not, defect class, evidence) plus one holistic pass — ADR-0027 item 3, ADR-0028 |
 
-The adversarial review is produced only by the automated engines (`bin/run-arm-wf`,
-`bin/dynamic-arm`, via `.claude/workflows/da-post-gate.js`) — it is not part of a hand-driven,
-single-agent run, and it never runs before the mechanical gate is green. It is a **hard, required
-check**: a scenario found violated, or a `no` holistic verdict, blocks stage 05-commit exactly as a
-red mechanical gate does. No generated stage plan (System A prime, ADR-0005/0028) can skip it.
+The adversarial review is produced only by the automated engine (the commit dispatch through
+`engine/workflows/da-post-gate.js`) — it is not part of a hand-driven, single-agent run, and it
+never runs before the mechanical gate is green. It is a **hard, required check**: a scenario
+found violated, or a `no` holistic verdict, blocks stage 05-commit exactly as a red mechanical
+gate does; a `partial` holistic verdict raises a steer-request here and parks the run for the
+operator. No generated stage plan can skip it.
 
 ## Audit
 

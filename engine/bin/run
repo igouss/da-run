@@ -674,6 +674,7 @@
       "restore"  (restore flags)
       (do (binding [*out* *err*]
             (println "usage: bin/run setup --project P --spec S [--arm folder] [--round R]")
+            (println "       bin/run mark --run RUNDIR --trigger dispatch:<kind>")
             (println "       bin/run record-commit --run RUNDIR")
             (println "       bin/run capture --run RUNDIR [--round R]")
             (println "       bin/run restore --run-id RUNID [--into DIR]")

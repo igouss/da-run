@@ -5,8 +5,8 @@ branch) into a **verified, committed change**, one stage at a time. There is no 
 advance by reading the right files at the right moment and writing each stage's output to its
 `output/` folder.
 
-You may be driving **every** stage (one agent, interactive) or **one** stage (the `bin/run-arm`
-wrapper runs a fresh agent per stage, each on a per-stage model — ADR-0009). Either way: read the
+You may be driving **every** stage (one agent, interactive) or **one** stage (the `da-run`
+skill dispatches a fresh agent per stage, each on a per-stage model — ADR-0009). Either way: read the
 stage's `CONTEXT.md`, load only what it names, and a stage is done when its `output/` has files.
 
 Nothing advances on "looks right." It advances on a stage's Audit passing and, at the end, the

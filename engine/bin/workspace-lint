@@ -4,8 +4,14 @@
 ;; Mirrors the RinDig PR checklist (context length, no committed outputs, one-way refs,
 ;; stage-contract shape) minus the no-em-dash rule (not this operator's convention).
 ;;
-;;   bin/workspace-lint             lint the workspace (root inferred from the script)
+;;   bin/workspace-lint             lint every flow (or one: bin/workspace-lint <name>)
 ;;   bin/workspace-lint --selftest  run the pure-core assertions, print {"selftest":"ok"}
+;;
+;; The contract shape these rules enforce — CLAUDE.md/CONTEXT.md names, the
+;; Inputs/Process/Outputs/Audit sections, the line budgets — is ENGINE LAW,
+;; deliberately applied to every flow: the uniform contract shape IS the
+;; algorithm, not one flow's house style (decided 2026-07-18, closing
+;; flow-content-in-engine item 4).
 
 (require '[clojure.string :as str]
          '[babashka.fs :as fs]

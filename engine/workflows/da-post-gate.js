@@ -16,7 +16,7 @@ export const meta = {
 //   worktree         absolute path to the target project's worktree (runDir + '/worktree')
 //   round            the round id (for labeling only)
 //   commitModel      model id for the commit stage (the flow pins it per ADR-0009; a
-//                    dynamic-arm plan may override it — the CALLER decides, this workflow just uses it)
+//                    caller may override it — the CALLER decides, this workflow just uses it)
 //   testPlanPath     absolute path to the test plan artifact (the tests handoff's output)
 //   gateReportPath   absolute path to the mechanical gate's verdict report
 //   reviewPath       absolute path where the adversarial review verdict is published

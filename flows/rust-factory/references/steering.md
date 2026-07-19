@@ -37,6 +37,16 @@ One specific question. Cite the spec line or file that forced it.
 `## Answer` stays empty — the operator fills it. Options are suggestions, not a menu; the
 operator may answer anything.
 
+If your stage steers **again** after an earlier answered request, do not overwrite the
+record: move the answered file to `STEER-REQUEST-<n>.md` beside it, then write the new
+request. (Correctness does not depend on this — the durable park is keyed on the question's
+content, so a new ask can never collide with an old answer — but the archive preserves every
+meter event.)
+
+The harness stamps meter metadata as top-level lines after the title (`Raised:`,
+`Answered:`, `Reason:`) — leave them alone; they are outside the sections and do not change
+how the file parses.
+
 ## The answer
 
 The operator writes the decision under `## Answer` (directly, via `bin/steer resolve`, or
@@ -52,6 +62,12 @@ run. Honor it, then do the stage's work; leave the file in place (it is the stee
   from either side (file edit or Restate resolve; the harness bridges both ways).
 - An **answered** request unblocks the same stage on the next drive of the same run dir.
 - `bin/steer check --run R` reports pending/answered requests (exit 3 = pending).
+- The durable park's workflow key is `<run-id>--<stage>--<fingerprint of Question+Options+
+  Round>`: a different question is always a fresh workflow, so a completed park can never
+  answer a later, different ask; only the byte-identical question replays its memoized answer.
+- `bin/steer resolve --reason <spec-gap|spec-wrong|scope-cut|preference|other>` classifies
+  the steer for the meter; `capture` freezes each steer's open time and classification into
+  `metrics.json`.
 - Waiting without blocking an interactive session: run `bin/steer park` in the background,
   or point a Monitor at `bin/steer check` / the Restate workflow output endpoint and get
   woken when the answer lands.
