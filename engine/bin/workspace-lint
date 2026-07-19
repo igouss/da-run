@@ -1,0 +1,177 @@
+#!/usr/bin/env bb
+;; workspace-lint — mechanical fitness functions for the directory-algorithm workspace.
+;; Robot-ergonomic: JSON on stdout. Exit 1 on any violation, 0 when clean.
+;; Mirrors the RinDig PR checklist (context length, no committed outputs, one-way refs,
+;; stage-contract shape) minus the no-em-dash rule (not this operator's convention).
+;;
+;;   bin/workspace-lint             lint the workspace (root inferred from the script)
+;;   bin/workspace-lint --selftest  run the pure-core assertions, print {"selftest":"ok"}
+
+(require '[clojure.string :as str]
+         '[babashka.fs :as fs]
+         '[babashka.process :as p]
+         '[cheshire.core :as json])
+
+;; ---- pure core -----------------------------------------------------------
+
+(def context-max 80)
+(def reference-max 200)
+(def stage-sections ["Inputs" "Process" "Outputs" "Audit"])
+
+(defn line-count [content] (count (str/split-lines content)))
+
+(defn too-long [max-lines files]
+  ;; files: seq of {:path :content}
+  (keep (fn [{:keys [path content]}]
+          (let [n (line-count content)]
+            (when (> n max-lines)
+              {:kind "TOO-LONG" :path path :detail (str n " lines > " max-lines)})))
+        files))
+
+(defn missing-sections [files]
+  ;; files: seq of {:path :content} — stage contracts
+  (for [{:keys [path content]} files
+        section stage-sections
+        :when (not (str/includes? content (str "## " section)))]
+    {:kind "MISSING-SECTION" :path path :detail (str "no '## " section "' section")}))
+
+(defn stage-number
+  "The NN in stages/NN-name/..., or nil."
+  [path]
+  (some-> (re-find #"stages/(\d+)-" path) second Integer/parseInt))
+
+(defn forward-refs
+  "A stage contract may reference only earlier-or-equal stages (one-way)."
+  [files]
+  (for [{:keys [path content]} files
+        :let [self (stage-number path)]
+        :when self
+        ref (re-seq #"\.\./(\d+)-" content)
+        :let [target (Integer/parseInt (second ref))]
+        :when (> target self)]
+    {:kind "FORWARD-REF" :path path
+     :detail (str "stage " self " references later stage " target)}))
+
+(defn flow-mismatches
+  "stages/ on disk must hold exactly the dirs flow.ron declares — the flow
+   is the single source of truth, the dirs its projection."
+  [flow-dirs actual-dirs]
+  (let [flow (set flow-dirs) actual (set actual-dirs)]
+    (concat
+     (for [d (sort (remove actual flow))]
+       {:kind "FLOW-DIR-MISSING" :path (str "stages/" d)
+        :detail "declared in flow.ron but absent on disk"})
+     (for [d (sort (remove flow actual))]
+       {:kind "FLOW-DIR-UNKNOWN" :path (str "stages/" d)
+        :detail "on disk but not declared in flow.ron"}))))
+
+(defn committed-outputs
+  "outputs: seq of {:stage path :extra [non-.gitkeep filenames]}"
+  [outputs]
+  (keep (fn [{:keys [stage extra]}]
+          (when (seq extra)
+            {:kind "COMMITTED-OUTPUT" :path stage
+             :detail (str "output/ holds " (str/join ", " extra) " (only .gitkeep allowed)")}))
+        outputs))
+
+(defn lint
+  "Pure: assemble all violations from already-read inputs."
+  [{:keys [context-files reference-files stage-files outputs flow-dirs stage-dirs]}]
+  (vec (concat (too-long context-max context-files)
+               (too-long reference-max reference-files)
+               (missing-sections stage-files)
+               (forward-refs stage-files)
+               (committed-outputs outputs)
+               (flow-mismatches flow-dirs stage-dirs))))
+
+;; ---- selftest ------------------------------------------------------------
+
+(defn selftest []
+  (assert (= 3 (line-count "a\nb\nc")))
+  (assert (empty? (too-long 80 [{:path "x" :content "a\nb"}])))
+  (assert (= 1 (count (too-long 1 [{:path "x" :content "a\nb"}]))))
+  (assert (= 2 (stage-number "stages/02-tests/CONTEXT.md")))
+  (assert (nil? (stage-number "references/architecture.md")))
+  (assert (= 1 (count (missing-sections [{:path "s" :content "## Inputs\n## Process\n## Outputs"}]))))
+  (assert (empty? (missing-sections [{:path "s" :content "## Inputs\n## Process\n## Outputs\n## Audit"}])))
+  (assert (empty? (forward-refs [{:path "stages/02-tests/CONTEXT.md" :content "read ../01-design/output/"}])))
+  (assert (= 1 (count (forward-refs [{:path "stages/02-tests/CONTEXT.md" :content "read ../03-implement/output/"}]))))
+  (assert (= 1 (count (committed-outputs [{:stage "s/output" :extra ["design.md"]}]))))
+  (assert (empty? (committed-outputs [{:stage "s/output" :extra []}])))
+  (assert (empty? (flow-mismatches ["01-design"] ["01-design"])))          ; zero mismatches
+  (assert (= 1 (count (flow-mismatches ["01-design" "02-tests"] ["01-design"])))) ; one missing
+  (assert (= "FLOW-DIR-UNKNOWN"                                            ; one unknown
+             (:kind (first (flow-mismatches ["01-design"] ["01-design" "09-extra"])))))
+  (assert (= 4 (count (flow-mismatches ["01-a" "02-b"] ["03-c" "04-d"])))) ; many (2 missing + 2 unknown)
+  (println (json/generate-string {:selftest "ok"})))
+
+;; ---- imperative shell ----------------------------------------------------
+
+(defn script-bin [] (-> *file* fs/absolutize fs/normalize fs/parent str))
+
+(defn flow-dirs
+  "Stage dirs from flow.ron via `state flow` — the flow subcommand validates
+   the file (load-time validation) and emits the pipeline as JSON."
+  [root]
+  (let [r (p/sh (str (script-bin) "/state") "flow" "--file" (str root "/flow.ron"))]
+    (when-not (zero? (:exit r))
+      (binding [*out* *err*] (println "error: flow.ron failed validation:" (str/trim (:out r))))
+      (System/exit 2))
+    (mapv :dir (:stages (json/parse-string (:out r) true)))))
+
+(defn gather [root]
+  (let [rootp (fs/path root)
+        rel   (fn [p] (str (fs/relativize rootp p)))
+        readf (fn [p] {:path (rel p) :content (slurp (str p))})
+        files (->> (fs/glob rootp "**") (filter fs/regular-file?))
+        context (->> files (filter #(= "CONTEXT.md" (fs/file-name %))) (map readf))
+        refs    (->> files (map readf) (filter #(re-find #"^references/.*\.md$" (:path %))))
+        stages  (->> context (filter #(re-find #"^stages/\d+-" (:path %))))
+        outputs (->> (fs/glob rootp "stages/*/output")
+                     (filter fs/directory?)
+                     (map (fn [d]
+                            {:stage (rel d)
+                             :extra (->> (fs/list-dir d)
+                                         (map (comp str fs/file-name))
+                                         (remove #(= ".gitkeep" %))
+                                         vec)})))]
+    {:context-files (vec context)
+     :reference-files (vec refs)
+     :stage-files (vec stages)
+     :outputs (vec outputs)
+     :flow-dirs (flow-dirs root)
+     :stage-dirs (->> (fs/list-dir (fs/path rootp "stages"))
+                      (filter fs/directory?)
+                      (map (comp str fs/file-name))
+                      sort
+                      vec)}))
+
+(defn engine-root [] (-> *file* fs/absolutize fs/normalize fs/parent fs/parent str))
+
+(defn flows-root [] (str (fs/parent (engine-root)) "/flows"))
+
+(defn resolve-flow
+  "A flow name under flows/, an explicit path, or every flow when given none."
+  [name]
+  (let [dir (if (str/starts-with? (str name) "/") name (str (flows-root) "/" name))]
+    (when-not (fs/exists? (str dir "/flow.ron"))
+      (binding [*out* *err*] (println "error: no flow.ron under" (str dir)))
+      (System/exit 2))
+    (str dir)))
+
+(defn all-flows []
+  (->> (fs/list-dir (flows-root)) (filter fs/directory?) (map str) sort vec))
+
+(let [args *command-line-args*]
+  (if (some #{"--selftest"} args)
+    (selftest)
+    (let [named (first (remove #(str/starts-with? % "-") args))
+          roots (if named [(resolve-flow named)] (all-flows))
+          violations (vec (mapcat #(lint (gather %)) roots))
+          root (str/join "," roots)
+          violations (lint (gather root))]
+      (println (json/generate-string {:root (str root)
+                                      :violations violations
+                                      :count (count violations)
+                                      :clean (empty? violations)}))
+      (System/exit (if (empty? violations) 0 1)))))

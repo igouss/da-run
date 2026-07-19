@@ -1,0 +1,19 @@
+[package]
+name = "da-adapter-fs"
+version.workspace = true
+edition.workspace = true
+description = "Ring 3: reads a run dir into FsFacts"
+
+[dependencies]
+sha2 = { workspace = true }
+da-domain = { workspace = true }
+da-ports = { workspace = true }
+ron = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

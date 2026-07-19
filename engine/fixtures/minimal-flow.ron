@@ -1,0 +1,72 @@
+// minimal-flow.ron — the engine's own test fixture.
+//
+// Deliberately NOT a real pipeline and deliberately not the rust-factory
+// flow: the engine must not assert against any shipped flow, or moving a
+// stage in a skill breaks the engine's tests. This exercises every shape the
+// loader must handle — the three roles, both guard kinds, a stage with no
+// artifact, and a stage with more than one dispatch — and nothing more.
+Flow(
+    initial_label: "specced",
+    stages: [
+        Stage(
+            name: "plan",
+            dir: "01-plan",
+            role: Handoff(done_label: "planned"),
+            artifact: "plan.md",
+            dispatches: [
+                Dispatch(kind: "plan", model: "opus", strategy: "single"),
+                Dispatch(
+                    kind: "plan-review",
+                    model: "opus",
+                    strategy: "review",
+                    advisory: [
+                        Needs(stage: "plan", code: "review-without-plan"),
+                    ],
+                ),
+            ],
+        ),
+        Stage(
+            name: "build",
+            dir: "02-build",
+            role: Handoff(done_label: "built"),
+            dispatches: [
+                Dispatch(
+                    kind: "build",
+                    model: "sonnet",
+                    strategy: "single",
+                    warn_on_red_gate: true,
+                    blocking: [
+                        Needs(
+                            stage: "plan",
+                            code: "build-before-plan",
+                            detail: "build before stages/01-plan/output/ has a plan",
+                        ),
+                    ],
+                ),
+            ],
+        ),
+        Stage(
+            name: "check",
+            dir: "03-check",
+            role: Gate,
+            artifact: "gate-report.md",
+            dispatches: [
+                Dispatch(
+                    kind: "check",
+                    advisory: [
+                        Needs(stage: "build", code: "check-without-build"),
+                    ],
+                ),
+            ],
+        ),
+        Stage(
+            name: "land",
+            dir: "04-land",
+            role: Commit,
+            artifact: "commit.md",
+            dispatches: [
+                Dispatch(kind: "land", model: "sonnet"),
+            ],
+        ),
+    ],
+)

@@ -1,0 +1,13 @@
+---
+source: crates/wire/tests/wire_shapes.rs
+expression: "CheckWire::refused(&refusal)"
+---
+{
+  "v": 1,
+  "allowed": false,
+  "reason": {
+    "code": "commit-before-green-gate",
+    "detail": "commit before stages/04-verify/output/gate-report.md shows GATE GREEN (gate: red)",
+    "gate": "red"
+  }
+}

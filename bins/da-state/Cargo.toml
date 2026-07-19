@@ -1,0 +1,21 @@
+[package]
+name = "da-state"
+version.workspace = true
+edition.workspace = true
+description = "Composition root: the run-state authority CLI"
+
+[dependencies]
+da-domain = { workspace = true }
+da-ports = { workspace = true }
+da-app = { workspace = true }
+da-adapter-fs = { workspace = true }
+da-adapter-restate = { workspace = true }
+da-wire = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = "1"
+tempfile = { workspace = true }
+
+[lints]
+workspace = true

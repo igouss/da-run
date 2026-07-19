@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# state — thin resolver for the da-state binary (the run-state authority).
+#
+# Prefers a prebuilt release binary; falls back to cargo run so a fresh
+# checkout works with nothing but cargo on PATH. All arguments pass through;
+# exit codes are da-state's own (0 allowed/ok, 2 broken run dir or usage,
+# 3 steer pending, 4 ordering violation).
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+skill_dir="$(cd "$here/../.." && pwd)"
+binary="$skill_dir/target/release/da-state"
+
+if [[ -x "$binary" ]]; then
+  exec "$binary" "$@"
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+  echo '{"error":"da-state binary not built and cargo not on PATH — run: cargo build --release --manifest-path '"$skill_dir"'/Cargo.toml"}' >&2
+  exit 2
+fi
+
+exec cargo run -q --release --manifest-path "$skill_dir/Cargo.toml" --bin da-state -- "$@"
