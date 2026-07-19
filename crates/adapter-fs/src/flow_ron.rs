@@ -92,6 +92,12 @@ struct DispatchRon {
     strategy: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    #[serde(default)]
+    design_from: Option<String>,
+    #[serde(default)]
+    tests_from: Option<String>,
+    #[serde(default)]
+    judge_reference: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -154,5 +160,8 @@ fn dispatch_spec(raw: DispatchRon) -> DispatchSpec {
         model: raw.model,
         strategy: raw.strategy,
         effort: raw.effort,
+        design_from: raw.design_from,
+        tests_from: raw.tests_from,
+        judge_reference: raw.judge_reference,
     }
 }

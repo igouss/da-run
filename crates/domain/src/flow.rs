@@ -48,6 +48,17 @@ pub struct DispatchSpec {
     pub model: Option<String>,
     pub strategy: Option<String>,
     pub effort: Option<String>,
+    /// Named input stages for strategies that read specific earlier
+    /// handoffs (parallel-attempts, the commit-time adversarial review).
+    /// Data, not position: da-run's workflows guessed these positionally
+    /// (`prior[0]`, `handoffs[len-2]`), which breaks on any flow whose
+    /// shape differs. Validated: must name an earlier Handoff stage.
+    pub design_from: Option<String>,
+    pub tests_from: Option<String>,
+    /// Run-dir-relative reference file the parallel-attempts judge reads
+    /// (e.g. "references/rust-standards.md") — flow data, never an engine
+    /// hardcode.
+    pub judge_reference: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -120,6 +131,10 @@ pub struct DispatchDef {
     pub model: Option<String>,
     pub strategy: Option<String>,
     pub effort: Option<String>,
+    /// Validated names of earlier Handoff stages (see [`DispatchSpec`]).
+    pub design_from: Option<String>,
+    pub tests_from: Option<String>,
+    pub judge_reference: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -167,6 +182,10 @@ pub enum FlowError {
     DuplicateDispatchKind { kind: String },
     #[error("dispatch {kind:?} rule names unknown stage {stage:?}")]
     UnknownRuleStage { kind: String, stage: String },
+    #[error(
+        "dispatch {kind:?} names {stage:?} as an input stage, but it is not an earlier handoff"
+    )]
+    InputStageNotEarlierHandoff { kind: String, stage: String },
     #[error("dispatch {kind:?} blocking rule on {stage:?} must name a strictly earlier stage")]
     BlockRuleNotEarlier { kind: String, stage: String },
     #[error("dispatch {kind:?} advisory rule on {stage:?} must not name a later stage")]
@@ -478,6 +497,20 @@ fn resolve_dispatch_spec(
             code: rule.code.clone(),
         });
     }
+    for named in [&dispatch.design_from, &dispatch.tests_from]
+        .into_iter()
+        .flatten()
+    {
+        let target: usize = rule_target(specs, &dispatch.kind, named)?;
+        let earlier_handoff: bool =
+            target < stage_index && matches!(specs[target].role, RoleSpec::Handoff { .. });
+        if !earlier_handoff {
+            return Err(FlowError::InputStageNotEarlierHandoff {
+                kind: dispatch.kind.clone(),
+                stage: named.clone(),
+            });
+        }
+    }
     Ok(DispatchDef {
         kind: dispatch.kind.clone(),
         blocking,
@@ -486,6 +519,9 @@ fn resolve_dispatch_spec(
         model: dispatch.model.clone(),
         strategy: dispatch.strategy.clone(),
         effort: dispatch.effort.clone(),
+        design_from: dispatch.design_from.clone(),
+        tests_from: dispatch.tests_from.clone(),
+        judge_reference: dispatch.judge_reference.clone(),
     })
 }
 

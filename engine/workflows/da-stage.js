@@ -90,16 +90,23 @@ if (!input.workflowsDir) {
 }
 const wfDir = input.workflowsDir
 
-const handoffs = stages.filter((s) => s.role === 'handoff')
-
 phase('Stage')
+
+// Resolve a stage by NAME from the flow — never by position. da-run guessed
+// `handoffs[length - 2]` for the tests stage and `prior[0]` for the design,
+// which silently breaks on any flow with a different shape; the names now
+// come from the dispatch's design_from / tests_from fields in flow.ron.
+function named(name) {
+  const s = name && stages.find((x) => x.name === name)
+  return s ? { dir: s.dir, artifact: s.artifact } : null
+}
 
 if (owner.role === 'commit') {
   // the atomized adversarial reviewer + the scoped commit, as one hard-gated unit — a caller
   // cannot reach the commit agent without the review passing (ADR-0027 #3 / ADR-0028 §2).
-  // The reviewer reads the test plan of the last pre-implementation handoff.
+  // The reviewer reads the test plan of the dispatch's tests_from stage.
   const gate = stages.find((s) => s.role === 'gate')
-  const testsStage = handoffs[handoffs.length - 2]
+  const testsStage = named(dispatch.tests_from)
   const result = await workflow(
     { scriptPath: `${wfDir}/da-post-gate.js` },
     {
@@ -110,6 +117,8 @@ if (owner.role === 'commit') {
       testPlanPath: testsStage && `${input.runDir}/stages/${testsStage.dir}/output/${testsStage.artifact}`,
       gateReportPath: `${input.runDir}/stages/${gate.dir}/output/${gate.artifact}`,
       reviewPath: `${input.runDir}/stages/${gate.dir}/output/adversarial-review.md`,
+      steerPath: `${input.runDir}/stages/${gate.dir}/output/STEER-REQUEST.md`,
+      atomizerPath: `${input.runDir}/stages/${gate.dir}/atomizer.md`,
       commitRecordPath: `${input.runDir}/stages/${owner.dir}/output/${owner.artifact}`,
     }
   )
@@ -117,11 +126,7 @@ if (owner.role === 'commit') {
 }
 
 // Pre-gate handoff stage: enrich the spec with everything da-arm-pre needs so it
-// re-derives nothing — dirs, artifacts, and the earlier handoffs it may reference.
-const prior = handoffs
-  .filter((s) => stages.indexOf(s) < stages.indexOf(owner))
-  .map((s) => ({ dir: s.dir, artifact: s.artifact }))
-
+// re-derives nothing — dirs, artifacts, and the named input stages.
 const stageSpec = {
   kind: input.stage,
   model,
@@ -129,9 +134,20 @@ const stageSpec = {
   effort: dispatch.effort,
   dir: owner.dir,
   artifact: owner.artifact,
-  prior,
 }
-if (stageSpec.strategy === 'parallel-attempts' && input.attempts) stageSpec.attempts = input.attempts
+if (stageSpec.strategy === 'parallel-attempts') {
+  stageSpec.design = named(dispatch.design_from)
+  stageSpec.tests = named(dispatch.tests_from)
+  stageSpec.judgeReference = dispatch.judge_reference
+  if (!stageSpec.design || !stageSpec.tests) {
+    throw new Error(
+      `the "${input.stage}" dispatch uses parallel-attempts but its flow.ron entry does not ` +
+        'name resolvable design_from / tests_from stages — declare them; the engine never ' +
+        'guesses input stages by position'
+    )
+  }
+  if (input.attempts) stageSpec.attempts = input.attempts
+}
 
 const result = await workflow(
   { scriptPath: `${wfDir}/da-arm-pre.js` },

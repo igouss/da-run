@@ -33,6 +33,12 @@ pub struct FlowDispatchWire {
     pub strategy: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub design_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tests_from: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_reference: Option<String>,
 }
 
 impl FlowWire {
@@ -68,6 +74,9 @@ fn stage_wire(stage: &StageDef) -> FlowStageWire {
                 model: dispatch.model.clone(),
                 strategy: dispatch.strategy.clone(),
                 effort: dispatch.effort.clone(),
+                design_from: dispatch.design_from.clone(),
+                tests_from: dispatch.tests_from.clone(),
+                judge_reference: dispatch.judge_reference.clone(),
             })
             .collect(),
     }

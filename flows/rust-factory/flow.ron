@@ -23,6 +23,12 @@
 // blocking rules refuse the dispatch (exit 4); advisory rules only warn.
 // model / strategy are orchestration hints for the workflow layer (ADR-0009
 // tiers); the run-state machine ignores them.
+//
+// design_from / tests_from name the earlier handoff stages a strategy reads
+// (validated at load time); judge_reference is the run-dir-relative house
+// standard the parallel-attempts judge applies. Data here, never an engine
+// hardcode or a positional guess — a flow with a different shape supplies
+// its own.
 Flow(
     initial_label: "specced",
     stages: [
@@ -87,6 +93,9 @@ Flow(
                     model: "opus",
                     effort: "high",
                     strategy: "parallel-attempts",
+                    design_from: "design",
+                    tests_from: "tests",
+                    judge_reference: "references/rust-standards.md",
                     warn_on_red_gate: true,
                     blocking: [
                         Needs(
@@ -118,7 +127,7 @@ Flow(
             role: Commit,
             artifact: "commit.md",
             dispatches: [
-                Dispatch(kind: "commit", model: "sonnet"),
+                Dispatch(kind: "commit", model: "sonnet", tests_from: "tests"),
             ],
         ),
     ],

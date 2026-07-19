@@ -73,6 +73,9 @@ fn plain_dispatch(kind: &str, blocking: Vec<BlockRuleSpec>) -> DispatchSpec {
         model: None,
         strategy: None,
         effort: None,
+        design_from: None,
+        tests_from: None,
+        judge_reference: None,
     }
 }
 

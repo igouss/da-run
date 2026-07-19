@@ -167,10 +167,8 @@
     (selftest)
     (let [named (first (remove #(str/starts-with? % "-") args))
           roots (if named [(resolve-flow named)] (all-flows))
-          violations (vec (mapcat #(lint (gather %)) roots))
-          root (str/join "," roots)
-          violations (lint (gather root))]
-      (println (json/generate-string {:root (str root)
+          violations (vec (mapcat #(lint (gather %)) roots))]
+      (println (json/generate-string {:roots (mapv str roots)
                                       :violations violations
                                       :count (count violations)
                                       :clean (empty? violations)}))

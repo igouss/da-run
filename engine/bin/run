@@ -253,7 +253,8 @@
       (let [n (sh (str (engine-root) "/bin/state") "notify" "--run" run)]
         (when-not (zero? (:exit n))
           (binding [*out* *err*]
-            (println (str "note: mirror not updated (" (:cmd-detail n) (:err n) ")")))))
+            (println (str "note: mirror not updated (exit " (:exit n) ": "
+                          (if (seq (:err n)) (:err n) (:out n)) ")")))))
       (sha256 patch))))
 
 (defn seal [{:keys [run stage]}]
@@ -271,6 +272,11 @@
 
 (defn squash [{:keys [run]}]
   (when-not run (throw (ex-info "squash needs --run RUNDIR" {})))
+  (when-not (fs/exists? (str run "/worktree.patch"))
+    (throw (ex-info (str "no worktree.patch under " run
+                         " — the run was never sealed; run `bin/run seal --run " run
+                         "` (or the gate, which seals) before squashing")
+                    {})))
   (let [cfg  (edn/read-string (slurp (str run "/run.edn")))
         wt   (str run "/worktree")
         base (:base-commit cfg)
@@ -325,8 +331,22 @@
 ;; Sealing before the gate and recording the identity after it are one
 ;; operation, so the report can never describe code the gate did not see.
 
+(defn prune-attempts!
+  "Remove leftover parallel-attempt worktrees under <run>/attempts. Their
+   creation and removal are agent actions (the workflow layer cannot touch
+   the filesystem), so the engine guarantees cleanup here — the gate runs on
+   every path to a commit."
+  [run]
+  (let [dir (str run "/attempts")]
+    (when (fs/directory? dir)
+      (doseq [d (fs/list-dir dir)]
+        (sh "git" "-C" (str run "/worktree") "worktree" "remove" "--force" (str d))
+        (when (fs/exists? d) (fs/delete-tree d)))
+      (fs/delete-tree dir))))
+
 (defn gate [{:keys [run]}]
   (when-not run (throw (ex-info "gate needs --run RUNDIR" {})))
+  (prune-attempts! run)
   (let [flow   (run-flow run)
         stage  (gate-stage flow)
         wt     (str run "/worktree")

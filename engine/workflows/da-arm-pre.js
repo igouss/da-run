@@ -1,7 +1,7 @@
 export const meta = {
   name: 'da-arm-pre',
   description: 'Drive the pre-gate handoff subsequence of one directory-algorithm arm from a stage list — fixed (System A) or generated (System A prime) — up to but not including the mechanical gate.',
-  whenToUse: 'Called by da-stage.js (or bin/run-arm-wf) with a stage list enriched from the flow. Never call with a stage list that includes the gate or commit stages — those are hard invariants driven outside this script (ADR-0028).',
+  whenToUse: 'Called by da-stage.js with a stage list enriched from the flow. Never call with a stage list that includes the gate or commit stages — those are hard invariants driven outside this script (ADR-0028).',
   phases: [
     { title: 'Stages', detail: 'each handoff stage in list order, on its flow-configured model and strategy' },
   ],
@@ -9,15 +9,16 @@ export const meta = {
 
 // args:
 //   runDir, worktree      absolute paths (worktree = runDir + '/worktree')
-//   stageList             array of {kind, model, strategy, dir, artifact, prior, attempts?, effort?}
+//   stageList             array of {kind, model, strategy, dir, artifact, attempts?, effort?,
+//                          design?, tests?, judgeReference?}
 //                          — every field resolved by the CALLER from the run's flow.ron
 //                          (via `bin/state flow`). strategy in:
 //                          'single' | 'review' | 'parallel-attempts'
-//                          prior = earlier handoff stages as {dir, artifact}, pipeline order.
-//   The list is DATA, never re-derived by this script — System A's caller supplies the fixed
-//   list every round; System A prime's caller supplies whatever da-dynamic-arm's Plan phase
-//   returned. This script only ever executes what it is given: no stage name, dir, or model
-//   lives here.
+//                          design/tests = the flow-NAMED input handoffs as {dir, artifact}
+//                          (from design_from / tests_from — never positional guesses);
+//                          judgeReference = run-dir-relative house standard for the judge.
+//   The list is DATA, never re-derived by this script. This script only ever executes what
+//   it is given: no stage name, dir, model, or reference filename lives here.
 
 const STAGE_SCHEMA = {
   type: 'object',
@@ -90,25 +91,26 @@ function reviewPrompt(runDir, spec) {
   )
 }
 
-// The parallel-attempts strategy references the earlier handoffs by position:
-// the first prior stage holds the design, the last prior stage holds the tests.
-function designOf(spec) {
-  return spec.prior[0]
-}
-
-function testsOf(spec) {
-  return spec.prior[spec.prior.length - 1]
+// The parallel-attempts strategy reads the design and tests handoffs the
+// flow NAMED on its dispatch (design_from / tests_from) — never a positional
+// guess over the stage list, which breaks silently on a differently-shaped
+// flow. Attempt worktrees live under the run dir, not /tmp: /tmp collides
+// across concurrent runs and cargo builds overflow tmpfs (the run driver's
+// own rule); bin/run gate prunes any leftovers.
+function attemptWorktree(runDir, index) {
+  return `${runDir}/attempts/da-attempt-${index}`
 }
 
 function attemptPrompt(runDir, spec, index) {
-  const design = designOf(spec)
-  const tests = testsOf(spec)
+  const design = spec.design
+  const tests = spec.tests
+  const wt = attemptWorktree(runDir, index)
   return (
     `Stage ${spec.dir}, ATTEMPT ${index}, one of several independent parallel attempts that ` +
     `will be judged. Create your own throwaway git worktree off the SAME base commit as ` +
     `${runDir}/worktree (read the base commit from ${runDir}/run.edn): \n` +
     `  git -C <the target project repo, same repo as ${runDir}/worktree> worktree add ` +
-    `/tmp/da-attempt-${index} <base-commit>\n` +
+    `${wt} <base-commit>\n` +
     `Implement the change there per the design at ` +
     `${runDir}/stages/${design.dir}/output/${design.artifact} and the tests at ` +
     `${runDir}/stages/${tests.dir} (copy that stage's test files into your attempt ` +
@@ -116,13 +118,16 @@ function attemptPrompt(runDir, spec, index) {
     `unified diff of your attempt against the base commit as \`patch\` — do NOT touch ` +
     `${runDir}/worktree itself, another attempt or the judge may still be using it. Before ` +
     `finishing, remove your throwaway worktree ` +
-    `(\`git worktree remove --force /tmp/da-attempt-${index}\`).`
+    `(\`git worktree remove --force ${wt}\`).`
   )
 }
 
 function judgePrompt(runDir, spec, attempts) {
-  const design = designOf(spec)
-  const tests = testsOf(spec)
+  const design = spec.design
+  const tests = spec.tests
+  const standards = spec.judgeReference
+    ? `the house standards at ${runDir}/${spec.judgeReference}`
+    : `the house standards under ${runDir}/references/`
   const body = attempts
     .map((a, i) => `--- ATTEMPT ${i} (testsPass=${a.testsPass}) ---\n${a.selfAssessment}\n\nPATCH:\n${a.patch}\n`)
     .join('\n')
@@ -130,14 +135,13 @@ function judgePrompt(runDir, spec, attempts) {
     `${attempts.length} independent implementation attempts were made for the same design and ` +
     `tests (design at ${runDir}/stages/${design.dir}/output/${design.artifact}, tests at ` +
     `${runDir}/stages/${tests.dir}/output/${tests.artifact}). Judge them against the design's ` +
-    `requirement ledger, the tests, and the house standards at ` +
-    `${runDir}/references/rust-standards.md. Reject any attempt whose testsPass is false unless ` +
-    `every attempt failed. Pick exactly one winner by index (0-based).\n\n${body}`
+    `requirement ledger, the tests, and ${standards}. Reject any attempt whose testsPass is ` +
+    `false unless every attempt failed. Pick exactly one winner by index (0-based).\n\n${body}`
   )
 }
 
 function applyWinnerPrompt(runDir, spec, winnerPatch) {
-  const tests = testsOf(spec)
+  const tests = spec.tests
   return (
     `Apply exactly this patch to ${runDir}/worktree (the real, shared worktree — nothing else has ` +
     `touched it):\n\n${winnerPatch}\n\nUse \`git -C ${runDir}/worktree apply\`; if it fails to ` +
@@ -162,6 +166,12 @@ async function runStage(spec) {
     return agent(reviewPrompt(args.runDir, spec), agentOpts(spec, spec.kind, STAGE_SCHEMA))
   }
   if (spec.strategy === 'parallel-attempts') {
+    if (!spec.design || !spec.tests) {
+      throw new Error(
+        `parallel-attempts for "${spec.kind}" arrived without named design/tests input stages — ` +
+          'the caller resolves them from design_from / tests_from in flow.ron'
+      )
+    }
     const n = Math.max(2, Math.min(4, spec.attempts || 3))
     phase(`${spec.kind} (parallel attempts)`)
     const attempts = (

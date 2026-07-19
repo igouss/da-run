@@ -360,3 +360,56 @@ fn gate_without_artifact_is_refused() {
         })
     );
 }
+
+// Named input stages (design_from / tests_from) must be earlier handoffs.
+
+#[test]
+fn input_stage_naming_an_earlier_handoff_is_accepted() {
+    let spec: FlowSpec = spec_with(|spec: &mut FlowSpec| {
+        spec.stages[2].dispatches[0].design_from = Some("design".to_string());
+        spec.stages[2].dispatches[0].tests_from = Some("tests".to_string());
+    });
+    assert!(Flow::from_spec(spec).is_ok());
+}
+
+#[test]
+fn input_stage_naming_an_unknown_stage_is_refused() {
+    let spec: FlowSpec = spec_with(|spec: &mut FlowSpec| {
+        spec.stages[2].dispatches[0].tests_from = Some("no-such-stage".to_string());
+    });
+    assert_eq!(
+        Flow::from_spec(spec),
+        Err(FlowError::UnknownRuleStage {
+            kind: "implement".to_string(),
+            stage: "no-such-stage".to_string()
+        })
+    );
+}
+
+#[test]
+fn input_stage_naming_itself_or_later_is_refused() {
+    let spec: FlowSpec = spec_with(|spec: &mut FlowSpec| {
+        spec.stages[2].dispatches[0].tests_from = Some("implement".to_string());
+    });
+    assert_eq!(
+        Flow::from_spec(spec),
+        Err(FlowError::InputStageNotEarlierHandoff {
+            kind: "implement".to_string(),
+            stage: "implement".to_string()
+        })
+    );
+}
+
+#[test]
+fn input_stage_naming_the_gate_is_refused() {
+    let spec: FlowSpec = spec_with(|spec: &mut FlowSpec| {
+        spec.stages[4].dispatches[0].tests_from = Some("verify".to_string());
+    });
+    assert_eq!(
+        Flow::from_spec(spec),
+        Err(FlowError::InputStageNotEarlierHandoff {
+            kind: "commit".to_string(),
+            stage: "verify".to_string()
+        })
+    );
+}

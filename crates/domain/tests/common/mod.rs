@@ -117,6 +117,9 @@ pub fn dispatch(
         model: None,
         strategy: None,
         effort: None,
+        design_from: None,
+        tests_from: None,
+        judge_reference: None,
     }
 }
 
