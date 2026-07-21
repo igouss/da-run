@@ -16,6 +16,12 @@ another flow declares its own in `flow.ron`. Two required arguments:
 2. **requirements** — path to the frozen change-spec (markdown). This becomes the run's
    `spec.md`.
 
+If either argument is missing, **ask the operator** — never default the stage, and never
+infer a spec. If the file given is a plan, brief, epic or handoff rather than a frozen
+change-spec for one change, say so and settle the scope before Step 1: the pipeline drives
+*one* change, and a design agent pointed at an eight-task epic produces eight shallow
+designs. Extracting a single task's spec into its own file is the usual fix.
+
 ## Step 0 — locate the bundle
 
 Let `SKILL_DIR` = the absolute path of the directory containing this SKILL.md (you know it from
@@ -72,8 +78,14 @@ args (absolute paths only):
 { "runDir": "<absolute run dir>", "stage": "<stage>", "round": "ad-hoc",
   "workflowsDir": "<SKILL_DIR>/engine/workflows", "attempts": <N-if-given>,
   "stateCheck": <the JSON printed by the ordering-guard check below>,
+  "flow": <the JSON printed by `bash "$SKILL_DIR/engine/bin/state" flow --run <run-dir>`>,
   "steerState": <commit only: the JSON printed by `bb "$SKILL_DIR/engine/bin/steer" check --run <run-dir>`> }
 ```
+
+`flow` is required for **every** agent-stage dispatch — `da-stage.js` refuses without it.
+`flow.ron` is the single source of truth for the pipeline (stage dirs, artifacts, models,
+strategies), so the skill never restates it; read it off the run with `state flow` and pass
+it through verbatim. Fetch it once per run — it does not change between stages.
 
 `steerState` is required for the `commit` stage: a `partial` holistic verdict decides
 answered/parked from that JSON — a mechanical fact from the steer authority, never an agent's
@@ -108,7 +120,7 @@ marker is NOT committed, whatever the agent said.
 check). Run it yourself with Bash:
 
 ```sh
-bash "$SKILL_DIR/engine/bin/run" gate --run <run-dir>
+bb "$SKILL_DIR/engine/bin/run" gate --run <run-dir>
 ```
 
 The verbatim output goes to `<run-dir>/stages/04-verify/output/gate-report.md` (write it there if
@@ -129,10 +141,13 @@ run `bb "$SKILL_DIR/engine/bin/steer" check --run <run-dir>` — exit 3 means pe
 
 1. Relay the `## Question` and `## Options` to the user verbatim and ask for their decision.
 2. Write it under `## Answer` (or `bb "$SKILL_DIR/engine/bin/steer" resolve --run <run-dir>
-   --stage <NN> --answer "..." --reason <code>`), then re-dispatch the same stage — the
+   --stage <NN-name> --answer "..." --reason <code>`), then re-dispatch the same stage — the
    answered steer binds like the spec. `--reason` classifies the steer for the ADR-0010 meter
    (`spec-gap | spec-wrong | scope-cut | preference | other`) — ask the user which fits when
-   it is not obvious from their answer.
+   it is not obvious from their answer. `--stage` is the **full stage directory name**
+   (`03-implement`), not the bare number — `resolve` builds the path from it verbatim and
+   fails with `no steer-request at .../stages/03/output/...` if given `03`. Take it from the
+   `stage` field of `steer check`'s own JSON rather than retyping it.
 3. If the run is parked durably (`DA_STEER_INGRESS` set, `bin/steer park` running), don't
    block the session waiting: use a Monitor on `bin/steer check` (exit 0 = answered) or on
    the Restate output endpoint, and continue when it fires.
