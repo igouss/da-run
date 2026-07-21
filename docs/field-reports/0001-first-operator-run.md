@@ -302,7 +302,141 @@ say what it is assuming.
 
 ---
 
-## 4. Summary
+## 4. What should be automated, by kind of step
+
+The useful cut is not "which stage" but **how many right answers a step has**. Three kinds,
+and they want opposite treatment:
+
+**Deterministic — one right answer, must never be an LLM.** `verify` and `record-commit`
+already live here and the doc defends that well. These do not, and I did every one of them
+by hand this run:
+
+| Step | Doing it by hand cost | What it should be |
+|---|---|---|
+| Extract a spec from the tracker | `br show --json \| jq .[0].description`; I got the jq path wrong first try (it returns an array, not an object) | `run setup --spec-from-bead <id>` |
+| Thread `flow` into every dispatch | ~1 KB of JSON, five times | E1 — `da-stage.js` reads it from `runDir` |
+| **Confirm the tests are RED before `implement`** | I ran `cargo test` myself and read the counts | a gate, see below |
+| Compare binary size before/after | two builds, a `diff`, a scratch dir | `run cost --baseline <ref>` |
+| Squash-merge the run branch | by hand after the commit stage was killed | `run land --into main` |
+| Move the bead's status | still not done | part of `land` |
+
+**The red-test check is the important one and it does not exist.** The whole flow is
+TDD-shaped, but nothing verifies the premise. If `tests` emitted a suite that passed against
+a stub, `implement` would "succeed" instantly and `verify` would go green, and the run would
+report exactly what a real run reports. That is the false-green shape this repo has closed in
+three other places, sitting in the one place the pipeline never looks. It is also trivially
+mechanical: run the suite after `tests`, refuse to advance unless it fails. I checked it
+manually this run — 38 failed, 3 passed — and the 3 passers needed a look to confirm they
+were legitimately green (derived `Ord`, no `todo!()` behind them) rather than vacuous.
+
+**Mechanical-but-generative — many phrasings, one meaning. Cheap model, schema-constrained.**
+Commit-message drafting from `change-note.md`, the ledger↔test cross-reference, the
+change-note tables themselves. These are formatting jobs over decisions already made.
+
+**Judgment — genuinely open. Expensive model, and worth it.** Design, adversarial review,
+steer adjudication. This is where the run's money should go and largely where it went.
+
+One more automatable thing, learned from the stage you killed: it left probe tests in
+`alarm.rs` using `for` loops and `.for_each`, against this project's explicit
+complexity-1/no-loops rule. A lint for loops in test bodies would have caught it. More
+generally, **scratch code a stage writes to think with should be distinguishable from code it
+means to deliver** — right now both just appear in the worktree.
+
+## 5. Orientation — what I had to discover before I could start
+
+Everything below was discovered by hand, in this order, before or during the run. None of it
+is in `SKILL.md`, and all of it is derivable from files already in the target project:
+
+1. Whether `bb`/`cargo` existed, and the shebang of each `bin/*` script (found D2 this way).
+2. The tracker: that `br` is the tracker, that beads are the real specs, `br ready` for
+   unblocked work, and the JSON shape of `br show`.
+3. The build/test/lint/gate commands — `just --list`, then reading recipe bodies, then
+   grepping `justfile` for the `elf`, `port`, `sg`, `pyshim` variables to learn how the board
+   is reached.
+4. That there are **two** cargo workspaces (host and `firmware/`), which is what later made
+   the zero-cost claim provable — zero changed files under `firmware/` means the device
+   binary cannot move.
+5. Which app is the canary (`host-monitor`), and that `just run` restores plant-monitor.
+6. The conventions: `/home/elendal/CLAUDE.md`, `hex-arch` roles, scoped commits, `kb/`.
+
+Proposal: **`bin/run orient --project <P>`**, emitting JSON, run once at setup and written
+into the run dir. Fields: workspace roots, build/test/lint commands, the gate command, the
+tracker CLI and its spec-extraction invocation, conventions file paths, hardware recipes, and
+the canary binary. Sources are all mechanical — `justfile`, `Cargo.toml` workspace members,
+`.da/gate`, `CLAUDE.md`.
+
+Two payoffs beyond saving my time. It would have caught D2 automatically (compare each
+`bin/*` shebang against how `SKILL.md` invokes it). And the flow's `CONTEXT.md` is static
+today — a generated orientation block would make it true per project instead of generically
+worded.
+
+## 6. Model routing — and the one place this run got it backwards
+
+`flow.ron` already carries per-dispatch `model` and `effort`, so all of this is a data change,
+not a code change. Current assignment: design/implement opus-high, tests/commit sonnet, verify
+no LLM.
+
+**Verify on no LLM, and design/implement on opus, are both right.** Design earned it — the
+`AckSet` reasoning and the declined `freshness.rs` carve are the kind of argument a cheap
+model does not produce. `design-review` on opus earned it too: it took my steering note,
+resolved the multi-fault gap, and added not just the scenario but *its mirror*, which is the
+part that makes the test non-vacuous.
+
+**`tests` on sonnet was a false economy on this run, and the numbers say so.** It was the
+most expensive stage anyway (180K, 13m24s) and it shipped four mutually contradictory
+expectations: a 2–2 split on `silent_for_ms`, an arithmetic error, and a scenario unpassable
+by any implementation. Cleaning that up cost an implement pause (125K), an operator decision,
+and a full implement re-run (103K) — call it 230K plus your attention, to save the difference
+between sonnet and opus on one stage.
+
+Test authorship looks mechanical and isn't. It is where the spec's ambiguities surface, and
+that is precisely a judgment task. Two options, not exclusive:
+
+- move `tests` to opus for spec-dense beads, or
+- add a deterministic **self-consistency check** on the emitted suite before `implement`
+  — same input tuple asserted to two different expected values is mechanically detectable,
+  and it is exactly what cost 230K to find the expensive way.
+
+Candidates to move **down**: the commit stage's message-drafting and change-note formatting
+are cheap-model work once the adversarial review has rendered its verdict. The review itself
+is not.
+
+## 7. Steering — and getting the request onto your phone
+
+The park is durable already: `DaSteer` holds a workflow per steer-request on a Restate
+awakeable, `bin/steer park` bridges the file answer into it, and `bin/state notify` mirrors
+run state into `DaRun`. **The missing piece is not durability, it is the outbound edge.**
+Nothing anywhere tells the operator a steer exists. This run, the stage parked and I printed
+the question to a terminal you were not required to be looking at.
+
+Three layers, cheapest first:
+
+**(a) Works today, needs one line in `SKILL.md`.** Every Claude Code session has a
+`PushNotification` tool that raises a desktop notification and pushes to the phone when
+Remote Control is connected. The driving agent already knows the instant a stage returns
+`steerPaused` — it does not even need to poll. `SKILL.md` should say: on a steer pause, push
+a notification naming the run and the question before relaying it. I did not do this and
+should have; it is the single cheapest fix in this document.
+
+**(b) For headless and cron runs, where no session is attached.** `bin/steer park` should
+fire an outbound notification when it parks — webhook, ntfy, or the Restate side calling out.
+This is the case that actually matters: a run started by a schedule parks at 02:00 and,
+today, waits silently until someone thinks to look.
+
+**(c) Answering from the phone — mostly already possible.** Since `park` bridges the
+awakeable to the file, resolving a steer from a phone is a `POST` to the Restate ingress; the
+`resolve` path is the same one `bin/steer` uses. This should be **documented with a worked
+curl**, because it turns a parked run from "blocked until I am at my desk" into "blocked
+until I read my phone." Two caveats worth stating in the doc: the answer is prose that binds
+like the spec, so a phone-sized answer is a real constraint — and `--reason` should not be
+required from a phone (see S3; let the agent propose it).
+
+Worth pairing with E5: a steer notification should carry **what the run has spent so far**.
+The decision "answer this and continue" is also a decision to spend the next 100–200K, and
+right now the operator makes it blind. You killed this run at 800K without that number ever
+having been shown to you.
+
+## 8. Summary
 
 | # | Item | Severity | Status |
 |---|---|---|---|
@@ -319,6 +453,13 @@ say what it is assuming.
 | E3 | no worked session example | medium | open |
 | E4 | spec-shape unaddressed | medium | `SKILL.md` fixed |
 | E5 | run cost undisclosed — 800K+ tokens, run killed | **high** | open |
+| A1 | nothing verifies the tests are RED before `implement` | **high** | open (§4) |
+| A2 | spec extraction, size comparison, land+bead-status all manual | medium | open (§4) |
+| A3 | stage scratch code is indistinguishable from deliverable | low | open (§4) |
+| O1 | no `run orient` — project discovery is all by hand | medium | open (§5) |
+| M1 | `tests` on sonnet cost ~230K downstream to repair | **high** | open (§6) |
+| N1 | a steer pause notifies nobody — no push, no webhook | **high** | open (§7) |
+| N2 | answering a steer from a phone is possible but undocumented | medium | open (§7) |
 
 If only two things get done: **E5** and **E1**.
 
@@ -335,3 +476,9 @@ could read itself from a path it already has.
 declared its test edits properly in `change-note.md`. The residue is real but smaller: the
 declaration was volunteered because my steer answer demanded it, not because the contract
 requires it.
+
+Of the later findings, three are cheap and pay immediately: **N1(a)** is one line in
+`SKILL.md` — push a notification when a stage parks, which every session can already do.
+**A1** is "run the suite after `tests` and refuse to advance if it passes," which closes a
+false-green hole in the pipeline's own premise. **M1** is a one-word change in `flow.ron`
+that this run's numbers argue would have *saved* ~230K rather than cost anything.
