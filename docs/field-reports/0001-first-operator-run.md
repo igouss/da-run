@@ -151,20 +151,43 @@ Recommend inverting it: the agent proposes a `--reason` with a one-line justific
 operator overrides if wrong. As written, it puts a taxonomy quiz between the operator and
 their answer.
 
-### S4 — nothing confirms an answer was actually consumed
+### S4 — declaring what a steer answer changed is a courtesy, not a contract
 
-After `resolve` and re-dispatch, the stage reported `allAuditsPassed: true`. Nothing in that
-result says *which* steer answer it read or what it did about it. I verified compliance by
-diffing the test files by hand — checking the two `3000`s had become `5000`s, that the
-arithmetic line read `1000`, that `world.last_chirp = None` was present, that the scenario
-count was unchanged at 23, and that no `#[ignore]`/`@wip` had appeared.
+**This entry was rewritten after I checked my own claim and found it overstated. The
+original text is preserved at the end of this section, because a field report that quietly
+edits its own findings is worth less than one that shows its corrections.**
 
-That check found nothing wrong. It also should not have been mine to do by hand. A stage that
-consumed a steer should have to declare, in its output, what the answer was and what it
-changed in response — particularly when the answer granted it authority to edit its own
-tests. Right now "the answer was obeyed" and "the answer was ignored and the stage got green
-another way" produce identical tool output. That is the false-green shape this project
-already closed in three other places.
+The workflow *result* — `{"stage":"implement","allAuditsPassed":true}` — says nothing about
+which steer answer was read or what was done about it. That much is accurate, and it is why
+I went and hand-diffed the test files.
+
+But the stage's own `change-note.md` did declare it, in full: a section headed **"Test-file
+edits made under the answered steer"**, tabulating all four edits with a rationale each,
+plus an explicit statement that nothing weakens, skips or removes a scenario and that the
+counts are unchanged (41 lib tests, 23 scenarios). It is a better record than my hand-diff
+was. My original finding — "obeyed and ignored produce identical tool output" — was wrong at
+the artifact level and right only at the tool-result level.
+
+The real gap is narrower and still worth closing: **that declaration happened because my
+steer answer explicitly demanded it.** I wrote "Report every test file edit explicitly in the
+stage output so the changes are reviewable." Nothing in the flow's stage contract requires
+it. An operator who answers a steer without thinking to ask for an audit trail — which is
+most operators, most of the time — gets whatever the stage chooses to volunteer.
+
+Recommend: make "declare what you changed under an answered steer, and affirm what you did
+not weaken" part of the implement/commit stage contract rather than something the operator
+has to think to request. The behaviour already exists and is good; it just is not guaranteed.
+
+Secondary, and unchanged from the original finding: the workflow result JSON could cheaply
+carry a `steerConsumed: "03-implement"` field so the driving agent knows an answer was read
+without opening an artifact.
+
+> *Original text, superseded:* "After `resolve` and re-dispatch, the stage reported
+> `allAuditsPassed: true`. Nothing in that result says which steer answer it read or what it
+> did about it… Right now 'the answer was obeyed' and 'the answer was ignored and the stage
+> got green another way' produce identical tool output." — The second sentence was true of
+> the tool result and false of the stage's artifacts. I filed it before reading
+> `change-note.md`.
 
 ### S5 — operator steering by editing an `output/` file is invisible once consumed
 
@@ -219,6 +242,42 @@ skeleton with `stage` left as a hole.
 - **"A steer pause is the operator's turn, not a failure — never answer it yourself."**
   Unambiguous, and it is the instruction that most needed to be unambiguous.
 
+### E5 — the run cost is not disclosed anywhere, and it is the thing that stopped this run
+
+The operator killed the `commit` stage mid-flight at **800K+ tokens** for the run. That is
+for *one* domain crate: ~700 lines of `no_std` Rust, 41 unit tests and 23 scenarios, with one
+steer pause. Measured per stage from the workflow results:
+
+| stage | subagent tokens | wall clock |
+|---|---|---|
+| design | 86K | 4m54s |
+| design-review | 70K | 3m37s |
+| tests | 180K | 13m24s |
+| implement (paused on steer) | 125K | 6m18s |
+| implement (re-run) | 103K | 6m18s |
+| commit | killed | — |
+
+`SKILL.md` says nothing about cost. It documents `all` — design → tests → implement → verify
+→ commit — as a casual convenience, with no hint that invoking it on a medium bead spends the
+better part of a million tokens. An operator reading the skill has no way to form an estimate
+before committing to a run, and the per-stage design means the cost arrives in five
+unannounced instalments.
+
+Two things would help, neither of them large:
+
+- **State the order of magnitude in `SKILL.md`**, next to the `all` stage. Even "expect
+  100–200K tokens per stage on a medium change" would let an operator choose `design` alone
+  over `all` deliberately rather than by luck.
+- **Report cumulative run cost in `bin/state status`.** The workflow results already carry
+  `subagent_tokens`; nothing aggregates them where the operator looks. A run that has spent
+  800K should be able to say so before the operator finds out from the billing side.
+
+Worth noting what the tokens bought, because the answer is not "nothing": the `tests` stage
+(the most expensive at 180K) produced the suite that later *caught* the four-way expectation
+contradiction, and the `implement` stage spent 125K discovering and arguing that
+contradiction rather than papering over it. This is not obviously bad value. But it should be
+a choice the operator makes with the number in front of them.
+
 ### E3 — no worked example of a session
 
 `SKILL.md` documents each call in isolation. A single ten-line transcript of a real
@@ -254,15 +313,25 @@ say what it is assuming.
 | S1 | no `steer show` | medium | open |
 | S2 | two answer paths, one unvalidated | medium | open |
 | S3 | `--reason` taxonomy asked of the operator | medium | open |
-| S4 | consumption of a steer answer is unverifiable | **high** | open |
+| S4 | declaring steer compliance is a courtesy, not a contract | medium | open (finding corrected) |
 | S5 | consumed operator notes vanish silently | medium | open |
 | E1 | `flow` threaded by hand every dispatch | **high** | open |
 | E3 | no worked session example | medium | open |
 | E4 | spec-shape unaddressed | medium | `SKILL.md` fixed |
+| E5 | run cost undisclosed — 800K+ tokens, run killed | **high** | open |
 
-If only two things get done: **E1** (stop making the operator carry `flow`) and **S4** (make a
-stage declare what steer answer it consumed and what it changed). E1 is pure friction on
-every single dispatch. S4 is the one open item that is a correctness risk rather than an
-annoyance — it is the same "an agent's report of success accepted as evidence of success"
-family this repo's open-questions index already declares closed in three other places, and
-steering is where the fourth instance lives.
+If only two things get done: **E5** and **E1**.
+
+**E5** ended this run. The operator killed the `commit` stage on cost, which means the
+pipeline's own last stage — the adversarial review and the verified commit record — never
+ran, and the change had to be landed by hand outside the machine. A pipeline whose final
+gate gets skipped for affordability reasons is losing exactly the assurance it exists to
+provide. Disclosing the number is the cheap half; making `all` affordable is the real work.
+
+**E1** is pure friction on every single dispatch — ~1 KB of hand-carried JSON that the engine
+could read itself from a path it already has.
+
+**S4** was downgraded from `high` after I checked my own claim and found the stage had
+declared its test edits properly in `change-note.md`. The residue is real but smaller: the
+declaration was volunteered because my steer answer demanded it, not because the contract
+requires it.
