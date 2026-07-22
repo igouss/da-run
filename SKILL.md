@@ -139,7 +139,15 @@ Any agent stage may pause by writing `stages/<NN>/output/STEER-REQUEST.md` (prot
 `$SKILL_DIR/flows/rust-factory/references/steering.md`) instead of completing. After every stage dispatch,
 run `bb "$SKILL_DIR/engine/bin/steer" check --run <run-dir>` — exit 3 means pending. Then:
 
-1. Relay the `## Question` and `## Options` to the user verbatim and ask for their decision.
+1. **Send a `PushNotification` first**, then relay the `## Question` and `## Options` to the
+   user verbatim and ask for their decision. A parked stage is the one moment in a run where
+   nothing proceeds until the operator acts, and stages run long enough that they will have
+   walked away — the notification reaches their phone when Remote Control is connected. Name
+   the run and what the question is about, and include the run's token spend so far if you
+   have it: answering is also a decision to spend the next stage. One line, under 200 chars,
+   e.g. `da-run 1784…5e74 parked at implement: stall duration — raw age or excess past the
+   deadline? (~600K spent)`. This is the only routine push in the skill; do not notify for
+   ordinary stage completions.
 2. Write it under `## Answer` (or `bb "$SKILL_DIR/engine/bin/steer" resolve --run <run-dir>
    --stage <NN-name> --answer "..." --reason <code>`), then re-dispatch the same stage — the
    answered steer binds like the spec. `--reason` classifies the steer for the ADR-0010 meter
